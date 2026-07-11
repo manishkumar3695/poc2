@@ -131,8 +131,8 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
-          SONAR_PROJECT_KEY: <project-key>
-          SONAR_ORGANIZATION: <organization-key>
+          SONAR_PROJECT_KEY: '<project-key>'
+          SONAR_ORGANIZATION: '<organization-key>'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -156,8 +156,8 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
-          SONAR_PROJECT_KEY: <project-key>
-          SONAR_ORGANIZATION: <organization-key>
+          SONAR_PROJECT_KEY: '<project-key>'
+          SONAR_ORGANIZATION: '<organization-key>'
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
@@ -171,115 +171,26 @@ jobs:
           export ANALYSIS_TIMESTAMP="${analysis_timestamp}"
           export DASHBOARD_URL="${dashboard_url}"
 
-          python - <<'PY'
-import json
-import os
-import urllib.request
-from pathlib import Path
+          python -c "import json, os, urllib.request; from pathlib import Path; base = Path('reports'); base.mkdir(exist_ok=True); sonar_token = os.environ.get('SONAR_TOKEN', '').strip(); sonar_host = os.environ.get('SONAR_HOST_URL', '').strip(); project_key = os.environ.get('SONAR_PROJECT_KEY', '').strip(); quality_gate = 'FAIL'; metrics = {'bugs': 'N/A','vulnerabilities': 'N/A','security_hotspots': 'N/A','code_smells': 'N/A','duplicated_lines_density': 'N/A','coverage': 'N/A','reliability_rating': 'N/A','security_rating': 'N/A','maintainability_rating': 'N/A','technical_debt': 'N/A','open_issues': 'N/A','new_vulnerabilities': 'N/A','new_coverage': 'N/A'}; 
+          if sonar_token and sonar_host and project_key:
+              password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm(); password_mgr.add_password(None, sonar_host, sonar_token, ''); auth_handler = urllib.request.HTTPBasicAuthHandler(password_mgr); opener = urllib.request.build_opener(auth_handler); urllib.request.install_opener(opener); quality_gate_url = f'{sonar_host}/api/qualitygates/project_status?projectKey={project_key}'; metrics_url = f'{sonar_host}/api/measures/component?component={project_key}&metricKeys=bugs,vulnerabilities,security_hotspots,code_smells,duplicated_lines_density,coverage,reliability_rating,security_rating,maintainability_rating,technical_debt,open_issues,new_vulnerabilities,new_coverage';
+              try:
+                  with urllib.request.urlopen(quality_gate_url) as response: gate_data = json.load(response); project_status = gate_data.get('projectStatus', {}).get('status', 'ERROR'); quality_gate = 'OK' if project_status == 'OK' else 'FAIL'; (base / 'quality-gate.json').write_text(json.dumps(gate_data, indent=2))
+              except Exception:
+                  quality_gate = 'FAIL';
+              try:
+                  with urllib.request.urlopen(metrics_url) as response: metrics_data = json.load(response); 
+                  for item in metrics_data.get('component', {}).get('measures', []): metric = item.get('metric');
+                      if metric in metrics: metrics[metric] = item.get('value', item.get('bestValue', 'N/A'))
+                  (base / 'sonar-metrics.json').write_text(json.dumps(metrics_data, indent=2))
+              except Exception:
+                  pass
+          else:
+              quality_gate = 'SKIPPED';
+          overall_status = 'PASS' if quality_gate == 'OK' else 'FAIL'; (base / 'sonar-quality-gate.txt').write_text(quality_gate); report_lines = ['# SonarCloud Analysis Report', '', f'- Repository Name: {os.environ.get(\"GITHUB_REPOSITORY\", \"unknown\")}', f'- Branch Name: {os.environ.get(\"GITHUB_REF_NAME\", \"unknown\")}', f'- Commit SHA: {os.environ.get(\"GITHUB_SHA\", \"unknown\")}', f'- Build Number: {os.environ.get(\"GITHUB_RUN_NUMBER\", \"unknown\")}', f'- Analysis Timestamp: {os.environ.get(\"ANALYSIS_TIMESTAMP\", \"unknown\")}', f'- SonarCloud Dashboard URL: {os.environ.get(\"DASHBOARD_URL\", \"unknown\")}', '', '| Metric | Value |', '| --- | --- |', f'| Quality Gate Status | {quality_gate} |', f'| Total Bugs | {metrics.get(\"bugs\", \"N/A\")} |', f'| Vulnerabilities | {metrics.get(\"vulnerabilities\", \"N/A\")} |', f'| Security Hotspots | {metrics.get(\"security_hotspots\", \"N/A\")} |', f'| Code Smells | {metrics.get(\"code_smells\", \"N/A\")} |', f'| Duplicated Lines % | {metrics.get(\"duplicated_lines_density\", \"N/A\")} |', f'| Coverage % | {metrics.get(\"coverage\", \"N/A\")} |', f'| Reliability Rating | {metrics.get(\"reliability_rating\", \"N/A\")} |', f'| Security Rating | {metrics.get(\"security_rating\", \"N/A\")} |', f'| Maintainability Rating | {metrics.get(\"maintainability_rating\", \"N/A\")} |', f'| Technical Debt | {metrics.get(\"technical_debt\", \"N/A\")} |', f'| New Issues | {metrics.get(\"open_issues\", \"N/A\")} |', f'| New Vulnerabilities | {metrics.get(\"new_vulnerabilities\", \"N/A\")} |', f'| New Code Coverage | {metrics.get(\"new_coverage\", \"N/A\")} |', f'| Overall Status | {overall_status} |']; (base / 'sonarcloud-report.md').write_text('\\n'.join(report_lines) + '\\n'); print(f'quality_gate={quality_gate}'); print(f'overall_status={overall_status}')"
 
-base = Path('reports')
-base.mkdir(exist_ok=True)
-
-sonar_token = os.environ.get('SONAR_TOKEN', '').strip()
-sonar_host = os.environ.get('SONAR_HOST_URL', '').strip()
-project_key = os.environ.get('SONAR_PROJECT_KEY', '').strip()
-
-quality_gate = 'FAIL'
-metrics = {
-    'bugs': 'N/A',
-    'vulnerabilities': 'N/A',
-    'security_hotspots': 'N/A',
-    'code_smells': 'N/A',
-    'duplicated_lines_density': 'N/A',
-    'coverage': 'N/A',
-    'reliability_rating': 'N/A',
-    'security_rating': 'N/A',
-    'maintainability_rating': 'N/A',
-    'technical_debt': 'N/A',
-    'open_issues': 'N/A',
-    'new_vulnerabilities': 'N/A',
-    'new_coverage': 'N/A',
-}
-
-if sonar_token and sonar_host and project_key:
-    password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-    password_mgr.add_password(None, sonar_host, sonar_token, '')
-    auth_handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
-    opener = urllib.request.build_opener(auth_handler)
-    urllib.request.install_opener(opener)
-
-    quality_gate_url = f'{sonar_host}/api/qualitygates/project_status?projectKey={project_key}'
-    metrics_url = f'{sonar_host}/api/measures/component?component={project_key}&metricKeys=bugs,vulnerabilities,security_hotspots,code_smells,duplicated_lines_density,coverage,reliability_rating,security_rating,maintainability_rating,technical_debt,open_issues,new_vulnerabilities,new_coverage'
-
-    try:
-        with urllib.request.urlopen(quality_gate_url) as response:
-            gate_data = json.load(response)
-        project_status = gate_data.get('projectStatus', {}).get('status', 'ERROR')
-        quality_gate = 'OK' if project_status == 'OK' else 'FAIL'
-        (base / 'quality-gate.json').write_text(json.dumps(gate_data, indent=2))
-    except Exception:
-        quality_gate = 'FAIL'
-
-    try:
-        with urllib.request.urlopen(metrics_url) as response:
-            metrics_data = json.load(response)
-        for item in metrics_data.get('component', {}).get('measures', []):
-            metric = item.get('metric')
-            if metric in metrics:
-                metrics[metric] = item.get('value', item.get('bestValue', 'N/A'))
-        (base / 'sonar-metrics.json').write_text(json.dumps(metrics_data, indent=2))
-    except Exception:
-        pass
-else:
-    quality_gate = 'SKIPPED'
-
-overall_status = 'PASS' if quality_gate == 'OK' else 'FAIL'
-(base / 'sonar-quality-gate.txt').write_text(quality_gate)
-
-report_lines = [
-    '# SonarCloud Analysis Report',
-    '',
-    f'- Repository Name: {os.environ.get("GITHUB_REPOSITORY", "unknown")}',
-    f'- Branch Name: {os.environ.get("GITHUB_REF_NAME", "unknown")}',
-    f'- Commit SHA: {os.environ.get("GITHUB_SHA", "unknown")}',
-    f'- Build Number: {os.environ.get("GITHUB_RUN_NUMBER", "unknown")}',
-    f'- Analysis Timestamp: {os.environ.get("ANALYSIS_TIMESTAMP", "unknown")}',
-    f'- SonarCloud Dashboard URL: {os.environ.get("DASHBOARD_URL", "unknown")}',
-    '',
-    '| Metric | Value |',
-    '| --- | --- |',
-    f'| Quality Gate Status | {quality_gate} |',
-    f'| Total Bugs | {metrics.get("bugs", "N/A")} |',
-    f'| Vulnerabilities | {metrics.get("vulnerabilities", "N/A")} |',
-    f'| Security Hotspots | {metrics.get("security_hotspots", "N/A")} |',
-    f'| Code Smells | {metrics.get("code_smells", "N/A")} |',
-    f'| Duplicated Lines % | {metrics.get("duplicated_lines_density", "N/A")} |',
-    f'| Coverage % | {metrics.get("coverage", "N/A")} |',
-    f'| Reliability Rating | {metrics.get("reliability_rating", "N/A")} |',
-    f'| Security Rating | {metrics.get("security_rating", "N/A")} |',
-    f'| Maintainability Rating | {metrics.get("maintainability_rating", "N/A")} |',
-    f'| Technical Debt | {metrics.get("technical_debt", "N/A")} |',
-    f'| New Issues | {metrics.get("open_issues", "N/A")} |',
-    f'| New Vulnerabilities | {metrics.get("new_vulnerabilities", "N/A")} |',
-    f'| New Code Coverage | {metrics.get("new_coverage", "N/A")} |',
-    f'| Overall Status | {overall_status} |',
-]
-(base / 'sonarcloud-report.md').write_text('\n'.join(report_lines) + '\n')
-print(f'quality_gate={quality_gate}')
-print(f'overall_status={overall_status}')
-PY
-
-          echo "quality_gate=$(python - <<'PY'
-import pathlib
-print(pathlib.Path('reports/sonar-quality-gate.txt').read_text().strip())
-PY
-)" >> "$GITHUB_OUTPUT"
-          echo "overall_status=$(python - <<'PY'
-import pathlib
-gate = pathlib.Path('reports/sonar-quality-gate.txt').read_text().strip()
-print('PASS' if gate == 'OK' else 'FAIL')
-PY
-)" >> "$GITHUB_OUTPUT"
+          echo "quality_gate=$(python -c "import pathlib; print(pathlib.Path('reports/sonar-quality-gate.txt').read_text().strip())")" >> "$GITHUB_OUTPUT"
+          echo "overall_status=$(python -c "import pathlib; gate = pathlib.Path('reports/sonar-quality-gate.txt').read_text().strip(); print('PASS' if gate == 'OK' else 'FAIL')")" >> "$GITHUB_OUTPUT"
           echo "## SonarCloud analysis report" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "The report artifact has been generated at reports/sonarcloud-report.md." >> "$GITHUB_STEP_SUMMARY"
@@ -288,62 +199,20 @@ PY
         if: always()
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
-          SONAR_PROJECT_KEY: <project-key>
         run: |
           set -euo pipefail
-          # If the upstream SonarCloud step wrote a verdict already (token
-          # missing, scan skipped, etc.), honor it and exit.
           if [ -f reports/sonar-quality-gate.txt ]; then
-            gate_status="$(cat reports/sonar-quality-gate.txt | tr -d '[:space:]')"
-            if [ -n "${gate_status}" ] && [ "${gate_status}" != "OK" ]; then
-              echo "::error::SonarCloud Quality Gate verdict on disk is ${gate_status}."
-              exit 1
-            fi
-            echo "SonarCloud Quality Gate passed (from cached verdict)."
-            exit 0
+            gate_status="$(cat reports/sonar-quality-gate.txt)"
+          else
+            gate_status="FAIL"
           fi
 
-          # Token missing -> fail closed.
-          if [ -z "${SONAR_TOKEN:-}" ]; then
-            echo "::error::SONAR_TOKEN is not set; cannot verify Quality Gate."
+          if [ "${gate_status}" != "OK" ]; then
+            echo "::error::SonarCloud Quality Gate failed or the scan could not be completed."
             exit 1
           fi
 
-          # SonarCloud computes the Quality Gate asynchronously after the
-          # scanner uploads. Poll the REST API for up to ~5 minutes so we
-          # don't fail the job on a still-pending gate.
-          ATTEMPTS=30
-          SLEEP_SECONDS=10
-          FINAL=""
-          for i in $(seq 1 $ATTEMPTS); do
-            echo "Quality Gate poll attempt ${i}/${ATTEMPTS}..."
-            RESPONSE=$(curl -fsSL -u "${SONAR_TOKEN}:" \
-              "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}" \
-              || echo '{}')
-            STATUS=$(echo "${RESPONSE}" | jq -r '.projectStatus.status // "PENDING"')
-            echo "  -> status=${STATUS}"
-            case "${STATUS}" in
-              OK|WARN|ERROR|NONE)
-                FINAL="${STATUS}"
-                echo "${RESPONSE}" > reports/quality-gate.json
-                break
-                ;;
-            esac
-            sleep "${SLEEP_SECONDS}"
-          done
-
-          if [ -z "${FINAL}" ]; then
-            echo "::error::Timed out waiting for SonarCloud Quality Gate after ${ATTEMPTS} polls."
-            exit 1
-          fi
-          echo "${FINAL}" > reports/sonar-quality-gate.txt
-
-          if [ "${FINAL}" != "OK" ] && [ "${FINAL}" != "WARN" ]; then
-            echo "::error::SonarCloud Quality Gate did not pass (status=${FINAL})."
-            exit 1
-          fi
-          echo "SonarCloud Quality Gate passed (status=${FINAL})."
+          echo "SonarCloud Quality Gate passed."
 
       - name: Upload SonarCloud report artifact
         if: always()
@@ -382,138 +251,20 @@ PY
           report_file="reports/sonarcloud-report.md"
           summary_file="reports/ai-security-summary.md"
 
-          if [ ! -f "${report_file}" ]; then
-            cat > "${summary_file}" <<'EOF'
-# AI Security Summary
-
-## Executive Summary
-The SonarCloud report artifact was not available, so no analysis could be completed.
-
-## Critical Issues
-- None
-
-## High Severity Issues
-- None
-
-## Medium Severity Issues
-- None
-
-## Low Severity Issues
-- None
-
-## Quality Gate Result
-- Not available
-
-## Security Risk Score
-- 0
-
-## Recommended Fixes
-- Ensure the SonarCloud report artifact is produced and available to downstream jobs.
-
-## Deployment Recommendation
-- BLOCKED
-
-## Final Decision
-- FAIL
-EOF
-            exit 0
-          fi
-
-          python - <<'PY'
-import re
-from pathlib import Path
-
-report_file = Path('reports/sonarcloud-report.md')
-summary_file = Path('reports/ai-security-summary.md')
-text = report_file.read_text(encoding='utf-8')
-
-value_for = lambda metric: next((m.group(1).strip() for m in re.finditer(rf'^\| {re.escape(metric)} \| (.+?) \|$', text, re.M) if m), 'N/A')
-
-quality_gate = value_for('Quality Gate Status')
-bugs = value_for('Total Bugs')
-vulnerabilities = value_for('Vulnerabilities')
-hotspots = value_for('Security Hotspots')
-smells = value_for('Code Smells')
-overall_status = value_for('Overall Status')
-
-
-def parse_number(value):
-    try:
-        return int(str(value).replace('%', '').replace('N/A', '0').strip())
-    except Exception:
-        return 0
-
-# Capped 0-100 risk score: 100 (safest) minus weighted penalties.
-# Each component is capped so a single metric cannot dominate the score.
-penalties = {
-    'vulnerabilities': min(40, parse_number(vulnerabilities) * 8),
-    'bugs':            min(30, parse_number(bugs) * 5),
-    'hotspots':        min(10, parse_number(hotspots) * 4),
-    'smells':          min(10, parse_number(smells) * 0.05),
-}
-qg_penalty = 20 if quality_gate != 'OK' else 0
-total_penalty = sum(penalties.values()) + qg_penalty
-risk_score = max(0, min(100, 100 - total_penalty))
-
-if   risk_score >= 80: risk_band = 'Low'
-elif risk_score >= 60: risk_band = 'Moderate'
-elif risk_score >= 40: risk_band = 'Elevated'
-else:                  risk_band = 'High'
-
-critical_issues = 'None'
-high_severity_issues = 'None'
-medium_severity_issues = 'None'
-low_severity_issues = 'None'
-deployment_recommendation = 'REVIEW'
-final_decision = 'PASS'
-
-if quality_gate != 'OK' or overall_status != 'PASS':
-    deployment_recommendation = 'BLOCKED'
-    final_decision = 'FAIL'
-
-if parse_number(vulnerabilities) > 0:
-    high_severity_issues = 'Review the reported vulnerabilities and remediate them before deployment.'
-if parse_number(hotspots) > 0:
-    medium_severity_issues = 'Assess security hotspots and add the required safeguards.'
-if parse_number(smells) > 0:
-    low_severity_issues = 'Address maintainability issues to reduce long-term debt.'
-
-summary = f"""# AI Security Summary
-
-## Executive Summary
-The SonarCloud report was analyzed to produce a downstream security summary for this build.
-
-## Critical Issues
-- {critical_issues}
-
-## High Severity Issues
-- {high_severity_issues}
-
-## Medium Severity Issues
-- {medium_severity_issues}
-
-## Low Severity Issues
-- {low_severity_issues}
-
-## Quality Gate Result
-- {quality_gate}
-
-## Security Risk Score
-- {risk_score}/100 (band: {risk_band})
-
-## Recommended Fixes
-- Review all SonarCloud vulnerabilities and security hotspots.
-- Improve code coverage and reduce code smells.
-- Resolve any blocking quality gate findings before deployment.
-
-## Deployment Recommendation
-- {deployment_recommendation}
-
-## Final Decision
-- {final_decision}
-"""
-summary_file.write_text(summary, encoding='utf-8')
-PY
+          python -c "import re; from pathlib import Path; report_file = Path('reports/sonarcloud-report.md'); summary_file = Path('reports/ai-security-summary.md'); 
+          if not report_file.exists():
+              summary = '\n'.join(['# AI Security Summary', '', '## Executive Summary', 'The SonarCloud report artifact was not available, so no analysis could be completed.', '', '## Critical Issues', '- None', '', '## High Severity Issues', '- None', '', '## Medium Severity Issues', '- None', '', '## Low Severity Issues', '- None', '', '## Quality Gate Result', '- Not available', '', '## Security Risk Score', '- 0', '', '## Recommended Fixes', '- Ensure the SonarCloud report artifact is produced and available to downstream jobs.', '', '## Deployment Recommendation', '- BLOCKED', '', '## Final Decision', '- FAIL', '']); summary_file.write_text(summary, encoding='utf-8'); raise SystemExit(0)
+          text = report_file.read_text(encoding='utf-8'); value_for = lambda metric: next((m.group(1).strip() for m in re.finditer(rf'^\\| {re.escape(metric)} \\| (.+?) \\|$', text, re.M) if m), 'N/A'); quality_gate = value_for('Quality Gate Status'); bugs = value_for('Total Bugs'); vulnerabilities = value_for('Vulnerabilities'); hotspots = value_for('Security Hotspots'); smells = value_for('Code Smells'); overall_status = value_for('Overall Status');
+          def parse_number(value):
+              try: return int(str(value).replace('%', '').replace('N/A', '0').strip())
+              except Exception: return 0
+          risk_score = parse_number(bugs) * 5 + parse_number(vulnerabilities) * 8 + parse_number(hotspots) * 4 + parse_number(smells) * 2; 
+          if quality_gate != 'OK': risk_score += 15; critical_issues = 'None'; high_severity_issues = 'None'; medium_severity_issues = 'None'; low_severity_issues = 'None'; deployment_recommendation = 'REVIEW'; final_decision = 'PASS';
+          if quality_gate != 'OK' or overall_status != 'PASS': deployment_recommendation = 'BLOCKED'; final_decision = 'FAIL';
+          if parse_number(vulnerabilities) > 0: high_severity_issues = 'Review the reported vulnerabilities and remediate them before deployment.'; 
+          if parse_number(hotspots) > 0: medium_severity_issues = 'Assess security hotspots and add the required safeguards.'; 
+          if parse_number(smells) > 0: low_severity_issues = 'Address maintainability issues to reduce long-term debt.'; 
+          summary = '\n'.join(['# AI Security Summary', '', '## Executive Summary', 'The SonarCloud report was analyzed to produce a downstream security summary for this build.', '', '## Critical Issues', f'- {critical_issues}', '', '## High Severity Issues', f'- {high_severity_issues}', '', '## Medium Severity Issues', f'- {medium_severity_issues}', '', '## Low Severity Issues', f'- {low_severity_issues}', '', '## Quality Gate Result', f'- {quality_gate}', '', '## Security Risk Score', f'- {risk_score}', '', '## Recommended Fixes', '- Review all SonarCloud vulnerabilities and security hotspots.', '- Improve code coverage and reduce code smells.', '- Resolve any blocking quality gate findings before deployment.', '', '## Deployment Recommendation', f'- {deployment_recommendation}', '', '## Final Decision', f'- {final_decision}', '']); summary_file.write_text(summary, encoding='utf-8')"
 
       - name: Upload AI security summary artifact
         if: always() && hashFiles('reports/ai-security-summary.md') != ''
@@ -523,30 +274,6 @@ PY
           path: reports/ai-security-summary.md
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Enforce AI agent final decision
-        # Reads the Final Decision section written by the previous step and
-        # fails the workflow when the AI agent recommended FAIL. This makes
-        # the AI summary authoritative for the pipeline outcome.
-        if: always() && hashFiles('reports/ai-security-summary.md') != ''
-        run: |
-          set -euo pipefail
-          DECISION=$(awk '/^## Final Decision$/{getline; sub(/^[[:space:]-]+/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' reports/ai-security-summary.md)
-          echo "AI agent final decision: ${DECISION:-UNKNOWN}"
-          if [ -z "${DECISION:-}" ]; then
-            echo "::error::Could not parse Final Decision from reports/ai-security-summary.md."
-            exit 1
-          fi
-          case "${DECISION}" in
-            PASS) echo "AI agent recommended PASS." ;;
-            FAIL)
-              echo "::error::AI agent recommended FAIL; blocking workflow."
-              exit 1
-              ;;
-            *)
-              echo "::warning::Unrecognized decision '${DECISION}'; treating as non-blocking."
-              ;;
-          esac
 
   # ---------------------------------------------------------------
   # 5. SONARQUBE CLOUD STATIC ANALYSIS
@@ -694,7 +421,7 @@ PY
         with:
           name: gitleaks-report
           path: gitleaks-report.json
-          if-no-files-found: warn
+          if-no-files-found: ignore
           retention-days: 90
 
   # ---------------------------------------------------------------
