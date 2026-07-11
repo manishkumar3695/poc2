@@ -1,0 +1,948 @@
+name: Build & Security
+
+# Required repository secrets:
+#   SONAR_TOKEN         - SonarCloud/SonarQube token
+#   SONAR_HOST_URL      - SonarCloud/SonarQube host URL (e.g. https://sonarcloud.io)
+#   SONAR_ORGANIZATION  - SonarCloud organization key
+#
+# Optional but recommended:
+#   GITHUB_TOKEN        - automatically provided; used for ghcr.io push and SARIF upload
+#
+# This is an intentionally vulnerable learning lab, so:
+#   - Gitleaks is run with --exit-code 0 (findings are reported, not failed on)
+#   - SonarQube and Trivy use continue-on-error: true (findings are informational, not gating)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Default permissions are tightest. Each job overrides what it needs.
+permissions:
+  contents: read
+
+# Shared env (e.g. SONAR_HOST_URL) is read by jobs that need it.
+env:
+  SONAR_HOST_URL: https://sonarcloud.io
+  SONAR_PROJECT_KEY: hariom6123_vulnerable-springboot-app
+  SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
+  
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. COVERAGE BUILD
+  # ---------------------------------------------------------------
+  build-and-coverage:
+    name: Build, test, and aggregate coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build, test, and aggregate coverage
+        if: always()
+        run: mvn -B -ntp -Pcoverage verify
+
+      - name: Upload coverage build artifact
+        if: always() && hashFiles('target/site/jacoco/jacoco.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-build-output
+          path: target/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # ---------------------------------------------------------------
+  # 2. UNIT TESTS
+  # ---------------------------------------------------------------
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: [build-and-coverage]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Run unit tests
+        run: mvn -B -ntp test
+
+      - name: Upload Surefire reports
+        if: always() && hashFiles('target/surefire-reports/*.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # ---------------------------------------------------------------
+  # 3. SONARCLOUD ANALYSIS WITH REPORT ARTIFACT
+  # ---------------------------------------------------------------
+  sonarcloud-analysis:
+    name: SonarCloud analysis
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Restore Maven dependencies
+        run: mvn -B -ntp dependency:go-offline
+
+      - name: Build application
+        run: mvn -B -ntp -DskipTests package
+
+      - name: Execute unit tests
+        run: mvn -B -ntp test
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - name: Run SonarCloud analysis
+        id: sonar_scan
+        continue-on-error: true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+          SONAR_PROJECT_KEY: <project-key>
+          SONAR_ORGANIZATION: <organization-key>
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          if [ -z "${SONAR_TOKEN}" ]; then
+            echo "::warning::SONAR_TOKEN is not configured. A placeholder report will be generated so downstream jobs still receive an artifact."
+            echo "SKIPPED" > reports/sonar-quality-gate.txt
+            exit 0
+          fi
+
+          echo "Running SonarCloud analysis for ${SONAR_PROJECT_KEY}"
+          mvn -B -ntp verify sonar:sonar \
+            -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
+            -Dsonar.organization="${SONAR_ORGANIZATION}" \
+            -Dsonar.host.url="${SONAR_HOST_URL}" \
+            -Dsonar.login="${SONAR_TOKEN}" \
+            -Dsonar.qualitygate.wait=true
+
+      - name: Generate SonarCloud markdown report
+        if: always()
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+          SONAR_PROJECT_KEY: <project-key>
+          SONAR_ORGANIZATION: <organization-key>
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          analysis_timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          dashboard_url="${SONAR_HOST_URL}/dashboard?id=${SONAR_PROJECT_KEY}"
+          export ANALYSIS_TIMESTAMP="${analysis_timestamp}"
+          export DASHBOARD_URL="${dashboard_url}"
+
+          python - <<'PY'
+import json
+import os
+import urllib.request
+from pathlib import Path
+
+base = Path('reports')
+base.mkdir(exist_ok=True)
+
+sonar_token = os.environ.get('SONAR_TOKEN', '').strip()
+sonar_host = os.environ.get('SONAR_HOST_URL', '').strip()
+project_key = os.environ.get('SONAR_PROJECT_KEY', '').strip()
+
+quality_gate = 'FAIL'
+metrics = {
+    'bugs': 'N/A',
+    'vulnerabilities': 'N/A',
+    'security_hotspots': 'N/A',
+    'code_smells': 'N/A',
+    'duplicated_lines_density': 'N/A',
+    'coverage': 'N/A',
+    'reliability_rating': 'N/A',
+    'security_rating': 'N/A',
+    'maintainability_rating': 'N/A',
+    'technical_debt': 'N/A',
+    'open_issues': 'N/A',
+    'new_vulnerabilities': 'N/A',
+    'new_coverage': 'N/A',
+}
+
+if sonar_token and sonar_host and project_key:
+    password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+    password_mgr.add_password(None, sonar_host, sonar_token, '')
+    auth_handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
+    opener = urllib.request.build_opener(auth_handler)
+    urllib.request.install_opener(opener)
+
+    quality_gate_url = f'{sonar_host}/api/qualitygates/project_status?projectKey={project_key}'
+    metrics_url = f'{sonar_host}/api/measures/component?component={project_key}&metricKeys=bugs,vulnerabilities,security_hotspots,code_smells,duplicated_lines_density,coverage,reliability_rating,security_rating,maintainability_rating,technical_debt,open_issues,new_vulnerabilities,new_coverage'
+
+    try:
+        with urllib.request.urlopen(quality_gate_url) as response:
+            gate_data = json.load(response)
+        project_status = gate_data.get('projectStatus', {}).get('status', 'ERROR')
+        quality_gate = 'OK' if project_status == 'OK' else 'FAIL'
+        (base / 'quality-gate.json').write_text(json.dumps(gate_data, indent=2))
+    except Exception:
+        quality_gate = 'FAIL'
+
+    try:
+        with urllib.request.urlopen(metrics_url) as response:
+            metrics_data = json.load(response)
+        for item in metrics_data.get('component', {}).get('measures', []):
+            metric = item.get('metric')
+            if metric in metrics:
+                metrics[metric] = item.get('value', item.get('bestValue', 'N/A'))
+        (base / 'sonar-metrics.json').write_text(json.dumps(metrics_data, indent=2))
+    except Exception:
+        pass
+else:
+    quality_gate = 'SKIPPED'
+
+overall_status = 'PASS' if quality_gate == 'OK' else 'FAIL'
+(base / 'sonar-quality-gate.txt').write_text(quality_gate)
+
+report_lines = [
+    '# SonarCloud Analysis Report',
+    '',
+    f'- Repository Name: {os.environ.get("GITHUB_REPOSITORY", "unknown")}',
+    f'- Branch Name: {os.environ.get("GITHUB_REF_NAME", "unknown")}',
+    f'- Commit SHA: {os.environ.get("GITHUB_SHA", "unknown")}',
+    f'- Build Number: {os.environ.get("GITHUB_RUN_NUMBER", "unknown")}',
+    f'- Analysis Timestamp: {os.environ.get("ANALYSIS_TIMESTAMP", "unknown")}',
+    f'- SonarCloud Dashboard URL: {os.environ.get("DASHBOARD_URL", "unknown")}',
+    '',
+    '| Metric | Value |',
+    '| --- | --- |',
+    f'| Quality Gate Status | {quality_gate} |',
+    f'| Total Bugs | {metrics.get("bugs", "N/A")} |',
+    f'| Vulnerabilities | {metrics.get("vulnerabilities", "N/A")} |',
+    f'| Security Hotspots | {metrics.get("security_hotspots", "N/A")} |',
+    f'| Code Smells | {metrics.get("code_smells", "N/A")} |',
+    f'| Duplicated Lines % | {metrics.get("duplicated_lines_density", "N/A")} |',
+    f'| Coverage % | {metrics.get("coverage", "N/A")} |',
+    f'| Reliability Rating | {metrics.get("reliability_rating", "N/A")} |',
+    f'| Security Rating | {metrics.get("security_rating", "N/A")} |',
+    f'| Maintainability Rating | {metrics.get("maintainability_rating", "N/A")} |',
+    f'| Technical Debt | {metrics.get("technical_debt", "N/A")} |',
+    f'| New Issues | {metrics.get("open_issues", "N/A")} |',
+    f'| New Vulnerabilities | {metrics.get("new_vulnerabilities", "N/A")} |',
+    f'| New Code Coverage | {metrics.get("new_coverage", "N/A")} |',
+    f'| Overall Status | {overall_status} |',
+]
+(base / 'sonarcloud-report.md').write_text('\n'.join(report_lines) + '\n')
+print(f'quality_gate={quality_gate}')
+print(f'overall_status={overall_status}')
+PY
+
+          echo "quality_gate=$(python - <<'PY'
+import pathlib
+print(pathlib.Path('reports/sonar-quality-gate.txt').read_text().strip())
+PY
+)" >> "$GITHUB_OUTPUT"
+          echo "overall_status=$(python - <<'PY'
+import pathlib
+gate = pathlib.Path('reports/sonar-quality-gate.txt').read_text().strip()
+print('PASS' if gate == 'OK' else 'FAIL')
+PY
+)" >> "$GITHUB_OUTPUT"
+          echo "## SonarCloud analysis report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The report artifact has been generated at reports/sonarcloud-report.md." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify Quality Gate result
+        if: always()
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+          SONAR_PROJECT_KEY: <project-key>
+        run: |
+          set -euo pipefail
+          # If the upstream SonarCloud step wrote a verdict already (token
+          # missing, scan skipped, etc.), honor it and exit.
+          if [ -f reports/sonar-quality-gate.txt ]; then
+            gate_status="$(cat reports/sonar-quality-gate.txt | tr -d '[:space:]')"
+            if [ -n "${gate_status}" ] && [ "${gate_status}" != "OK" ]; then
+              echo "::error::SonarCloud Quality Gate verdict on disk is ${gate_status}."
+              exit 1
+            fi
+            echo "SonarCloud Quality Gate passed (from cached verdict)."
+            exit 0
+          fi
+
+          # Token missing -> fail closed.
+          if [ -z "${SONAR_TOKEN:-}" ]; then
+            echo "::error::SONAR_TOKEN is not set; cannot verify Quality Gate."
+            exit 1
+          fi
+
+          # SonarCloud computes the Quality Gate asynchronously after the
+          # scanner uploads. Poll the REST API for up to ~5 minutes so we
+          # don't fail the job on a still-pending gate.
+          ATTEMPTS=30
+          SLEEP_SECONDS=10
+          FINAL=""
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "Quality Gate poll attempt ${i}/${ATTEMPTS}..."
+            RESPONSE=$(curl -fsSL -u "${SONAR_TOKEN}:" \
+              "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}" \
+              || echo '{}')
+            STATUS=$(echo "${RESPONSE}" | jq -r '.projectStatus.status // "PENDING"')
+            echo "  -> status=${STATUS}"
+            case "${STATUS}" in
+              OK|WARN|ERROR|NONE)
+                FINAL="${STATUS}"
+                echo "${RESPONSE}" > reports/quality-gate.json
+                break
+                ;;
+            esac
+            sleep "${SLEEP_SECONDS}"
+          done
+
+          if [ -z "${FINAL}" ]; then
+            echo "::error::Timed out waiting for SonarCloud Quality Gate after ${ATTEMPTS} polls."
+            exit 1
+          fi
+          echo "${FINAL}" > reports/sonar-quality-gate.txt
+
+          if [ "${FINAL}" != "OK" ] && [ "${FINAL}" != "WARN" ]; then
+            echo "::error::SonarCloud Quality Gate did not pass (status=${FINAL})."
+            exit 1
+          fi
+          echo "SonarCloud Quality Gate passed (status=${FINAL})."
+
+      - name: Upload SonarCloud report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonarcloud-report
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ---------------------------------------------------------------
+  # 4. SECURITY AI AGENT SUMMARY
+  # ---------------------------------------------------------------
+  security-ai-agent:
+    name: Security AI agent
+    runs-on: ubuntu-latest
+    needs: [sonarcloud-analysis]
+    if: ${{ always() && needs.sonarcloud-analysis.result != 'cancelled' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download SonarCloud report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sonarcloud-report
+          path: reports/
+
+      - name: Generate AI security summary
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          report_file="reports/sonarcloud-report.md"
+          summary_file="reports/ai-security-summary.md"
+
+          if [ ! -f "${report_file}" ]; then
+            cat > "${summary_file}" <<'EOF'
+# AI Security Summary
+
+## Executive Summary
+The SonarCloud report artifact was not available, so no analysis could be completed.
+
+## Critical Issues
+- None
+
+## High Severity Issues
+- None
+
+## Medium Severity Issues
+- None
+
+## Low Severity Issues
+- None
+
+## Quality Gate Result
+- Not available
+
+## Security Risk Score
+- 0
+
+## Recommended Fixes
+- Ensure the SonarCloud report artifact is produced and available to downstream jobs.
+
+## Deployment Recommendation
+- BLOCKED
+
+## Final Decision
+- FAIL
+EOF
+            exit 0
+          fi
+
+          python - <<'PY'
+import re
+from pathlib import Path
+
+report_file = Path('reports/sonarcloud-report.md')
+summary_file = Path('reports/ai-security-summary.md')
+text = report_file.read_text(encoding='utf-8')
+
+value_for = lambda metric: next((m.group(1).strip() for m in re.finditer(rf'^\| {re.escape(metric)} \| (.+?) \|$', text, re.M) if m), 'N/A')
+
+quality_gate = value_for('Quality Gate Status')
+bugs = value_for('Total Bugs')
+vulnerabilities = value_for('Vulnerabilities')
+hotspots = value_for('Security Hotspots')
+smells = value_for('Code Smells')
+overall_status = value_for('Overall Status')
+
+
+def parse_number(value):
+    try:
+        return int(str(value).replace('%', '').replace('N/A', '0').strip())
+    except Exception:
+        return 0
+
+# Capped 0-100 risk score: 100 (safest) minus weighted penalties.
+# Each component is capped so a single metric cannot dominate the score.
+penalties = {
+    'vulnerabilities': min(40, parse_number(vulnerabilities) * 8),
+    'bugs':            min(30, parse_number(bugs) * 5),
+    'hotspots':        min(10, parse_number(hotspots) * 4),
+    'smells':          min(10, parse_number(smells) * 0.05),
+}
+qg_penalty = 20 if quality_gate != 'OK' else 0
+total_penalty = sum(penalties.values()) + qg_penalty
+risk_score = max(0, min(100, 100 - total_penalty))
+
+if   risk_score >= 80: risk_band = 'Low'
+elif risk_score >= 60: risk_band = 'Moderate'
+elif risk_score >= 40: risk_band = 'Elevated'
+else:                  risk_band = 'High'
+
+critical_issues = 'None'
+high_severity_issues = 'None'
+medium_severity_issues = 'None'
+low_severity_issues = 'None'
+deployment_recommendation = 'REVIEW'
+final_decision = 'PASS'
+
+if quality_gate != 'OK' or overall_status != 'PASS':
+    deployment_recommendation = 'BLOCKED'
+    final_decision = 'FAIL'
+
+if parse_number(vulnerabilities) > 0:
+    high_severity_issues = 'Review the reported vulnerabilities and remediate them before deployment.'
+if parse_number(hotspots) > 0:
+    medium_severity_issues = 'Assess security hotspots and add the required safeguards.'
+if parse_number(smells) > 0:
+    low_severity_issues = 'Address maintainability issues to reduce long-term debt.'
+
+summary = f"""# AI Security Summary
+
+## Executive Summary
+The SonarCloud report was analyzed to produce a downstream security summary for this build.
+
+## Critical Issues
+- {critical_issues}
+
+## High Severity Issues
+- {high_severity_issues}
+
+## Medium Severity Issues
+- {medium_severity_issues}
+
+## Low Severity Issues
+- {low_severity_issues}
+
+## Quality Gate Result
+- {quality_gate}
+
+## Security Risk Score
+- {risk_score}/100 (band: {risk_band})
+
+## Recommended Fixes
+- Review all SonarCloud vulnerabilities and security hotspots.
+- Improve code coverage and reduce code smells.
+- Resolve any blocking quality gate findings before deployment.
+
+## Deployment Recommendation
+- {deployment_recommendation}
+
+## Final Decision
+- {final_decision}
+"""
+summary_file.write_text(summary, encoding='utf-8')
+PY
+
+      - name: Upload AI security summary artifact
+        if: always() && hashFiles('reports/ai-security-summary.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-security-summary
+          path: reports/ai-security-summary.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce AI agent final decision
+        # Reads the Final Decision section written by the previous step and
+        # fails the workflow when the AI agent recommended FAIL. This makes
+        # the AI summary authoritative for the pipeline outcome.
+        if: always() && hashFiles('reports/ai-security-summary.md') != ''
+        run: |
+          set -euo pipefail
+          DECISION=$(awk '/^## Final Decision$/{getline; sub(/^[[:space:]-]+/, ""); gsub(/[[:space:]]+$/, ""); print; exit}' reports/ai-security-summary.md)
+          echo "AI agent final decision: ${DECISION:-UNKNOWN}"
+          if [ -z "${DECISION:-}" ]; then
+            echo "::error::Could not parse Final Decision from reports/ai-security-summary.md."
+            exit 1
+          fi
+          case "${DECISION}" in
+            PASS) echo "AI agent recommended PASS." ;;
+            FAIL)
+              echo "::error::AI agent recommended FAIL; blocking workflow."
+              exit 1
+              ;;
+            *)
+              echo "::warning::Unrecognized decision '${DECISION}'; treating as non-blocking."
+              ;;
+          esac
+
+  # ---------------------------------------------------------------
+  # 5. SONARQUBE CLOUD STATIC ANALYSIS
+  # ---------------------------------------------------------------
+  sonarqube:
+    name: SonarQube Cloud analysis
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build, test, and aggregate coverage
+        if: always()
+        run: mvn -B -ntp -Pcoverage verify
+
+      - name: SonarCloud Analysis
+        continue-on-error: true
+        uses: sonarsource/sonarqube-scan-action@v3
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
+            -Dsonar.token=${SONAR_TOKEN}
+            -Dsonar.sources=src/main/java
+            -Dsonar.tests=src/test/java
+            -Dsonar.java.binaries=target/classes
+            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+            -Dsonar.junit.reportPaths=target/surefire-reports
+      - name: Download SonarQube measures report
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          curl -fsSL -u "${SONAR_TOKEN}:" \
+            "${{ env.SONAR_HOST_URL }}/project/issues?issueStatuses=OPEN&id=hariom6123_vulnerable-springboot-app" \
+            -o sonar-report.json || true 
+
+          echo "SonarQube report saved to sonar-report.json"
+          if [ -f sonar-report.json ]; then
+            if [ -s sonar-report.json ]; then
+              cat sonar-report.json
+            else
+              echo "SonarQube report file is empty."
+            fi
+          else
+            echo "No SonarQube report was generated."
+          fi
+
+      - name: Upload SonarQube report artifact
+        if: always() && hashFiles('sonar-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonar-report
+          path: sonar-report.json
+          if-no-files-found: warn
+          retention-days: 90
+  
+  # ---------------------------------------------------------------
+  # 4. TRIVY FILESYSTEM SCAN
+  # ---------------------------------------------------------------
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    needs: [sonarqube]
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan (SARIF)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          continue-on-error: true
+
+      - name: Upload Trivy filesystem SARIF
+        if: always() && hashFiles('trivy-fs.sarif') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-report
+          path: trivy-fs.sarif
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload Trivy filesystem SARIF to Security tab
+        if: always() && hashFiles('trivy-fs.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # ---------------------------------------------------------------
+  # 5. GITLEAKS SECRET SCAN
+  # ---------------------------------------------------------------
+  security:
+    name: Gitleaks secret scan
+    runs-on: ubuntu-latest
+    needs: [trivy-fs]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Gitleaks secret scan
+        run: |
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            echo "Installing gitleaks..."
+            GITLEAKS_VERSION="8.18.4"
+            curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+              | tar -xz -C /usr/local/bin gitleaks
+          fi
+          gitleaks detect --no-git --redact --exit-code 0 --report-path gitleaks-report.json || true
+          if [ -f gitleaks-report.json ]; then
+            echo "::group::Gitleaks findings"
+            cat gitleaks-report.json
+            echo "::endgroup::"
+          fi
+      - name: Upload Gitleaks report
+        if: always() && hashFiles('gitleaks-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  # ---------------------------------------------------------------
+  # 6. DOCKER IMAGE BUILD
+  # ---------------------------------------------------------------
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: [security]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image (load to local daemon)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: vulnerable-spring-app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+      - name: Save Docker image
+        run: docker save vulnerable-spring-app:ci | gzip > image.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar.gz
+          retention-days: 1
+
+  # ---------------------------------------------------------------
+  # 7. TRIVY IMAGE SCAN
+  # ---------------------------------------------------------------
+  trivy-image:
+    name: Trivy image scan
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: gunzip -c image.tar.gz | docker load
+
+      - name: Run Trivy image scan (SARIF)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: 'vulnerable-spring-app:ci'
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          continue-on-error: true
+
+      - name: Upload Trivy image SARIF
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-report
+          path: trivy-image.sarif
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload Trivy image SARIF to Security tab
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+  # ---------------------------------------------------------------
+  # 8. PUBLISH
+  # ---------------------------------------------------------------
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    needs: [trivy-image]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build runnable JAR
+        run: mvn -B -ntp -DskipTests package
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image to ghcr.io
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          load: false
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/vulnerable-spring-app:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/vulnerable-spring-app:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+  # ---------------------------------------------------------------
+  # 9. AUTO-REMEDIATE (Claude agent)
+  # ---------------------------------------------------------------
+  # Runs the sonar-trivy-remediator agent against the merged Trivy fs
+  # + image SARIF reports (and the SonarQube generic-issue JSON, when
+  # SONAR_TOKEN is present). The agent only modifies files in the
+  # working tree; nothing is pushed or committed by this job.
+  auto-remediate:
+    name: Sonar-Trivy auto-remediate
+    runs-on: ubuntu-latest
+    needs: [trivy-fs, trivy-image]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - name: Download Trivy filesystem SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-fs-report
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Download Trivy image SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-image-report
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Normalize Trivy SARIF filenames
+        run: |
+          set -e
+          # The artifacts are downloaded to reports/<artifactName>/, but the
+          # agent expects them flat under reports/. Flatten if needed.
+          if [ -f reports/trivy-fs-report/trivy-fs.sarif ] && [ ! -f reports/trivy-fs.sarif ]; then
+            cp reports/trivy-fs-report/trivy-fs.sarif reports/trivy-fs.sarif
+          fi
+          if [ -f reports/trivy-image-report/trivy-image.sarif ] && [ ! -f reports/trivy-image.sarif ]; then
+            cp reports/trivy-image-report/trivy-image.sarif reports/trivy-image.sarif
+          fi
+          ls -la reports/ || true
+
+      - name: Fetch SonarQube issues JSON
+        if: env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != '' && env.SONAR_PROJECT_KEY != ''
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
+        run: |
+          set -e
+          curl -fsSL -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/issues/search?projectKeys=${SONAR_PROJECT_KEY}&types=VULNERABILITY,CODE_SMELL,BUG,SECURITY_HOTSPOT&ps=500&p=1" \
+            -o reports/sonar-report.json || \
+            echo "::warning::Failed to fetch SonarQube report; agent will proceed without it."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Run auto-remediation agent
+        env:
+          NVDAI_API_KEY: ${{ secrets.nvdai_api_key }}
+        run: bash scripts/run-agent.sh
+
+      - name: Upload auto-remediation report
+        if: always() && hashFiles('reports/auto-remediation-report.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-remediation-report
+          path: reports/auto-remediation-report.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload working-tree patch
+        if: always()
+        run: |
+          git diff --stat > reports/git-diff-stat.txt || true
+          git diff       > reports/git-diff.patch       || true
+        shell: bash
+
+      - name: Upload patch artifact
+        if: always() && hashFiles('reports/git-diff.patch') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-remediation-patch
+          path: reports/git-diff.patch
+          if-no-files-found: warn
+          retention-days: 90
