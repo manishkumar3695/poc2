@@ -13,7 +13,7 @@
 #
 # Env (optional):
 #   TRIVY_SEVERITY  - default: CRITICAL,HIGH,MEDIUM,LOW
-#   TRIVY_VERSION   - default: 0.58.1
+#   TRIVY_VERSION   - default: 0.72.0
 #   SKIP_INSTALL    - if set, do not attempt to install the Trivy CLI
 #
 # Exit code: 0 always — Trivy findings are informational, not gating
@@ -23,16 +23,18 @@ set -euo pipefail
 OUT_DIR="${1:-reports}"
 SCAN_PATH="${2:-.}"
 SEVERITY="${TRIVY_SEVERITY:-CRITICAL,HIGH,MEDIUM,LOW}"
-TRIVY_VERSION="${TRIVY_VERSION:-0.58.1}"
+TRIVY_VERSION="${TRIVY_VERSION:-0.72.0}"
 
 mkdir -p "$OUT_DIR"
 
 # ---------------------------------------------------------------------
 # Install Trivy if not present.
 #
-# Prefer the upstream install.sh (handles arch/OS detection correctly
-# across versions). Fall back to a direct GitHub release download with
-# the asset name current at the time of writing, and finally to apt.
+# Primary path: download the Linux-64bit tarball directly from the GitHub
+# release, verify it against the published checksums.txt (defence against
+# CDN tampering / redirect hijinks), and untar trivy into /usr/local/bin.
+#
+# Fallback: use Trivy's upstream install.sh (which fetches from get.trivy.dev).
 # ---------------------------------------------------------------------
 if ! command -v trivy >/dev/null 2>&1; then
   if [ -n "${SKIP_INSTALL:-}" ]; then
@@ -40,41 +42,49 @@ if ! command -v trivy >/dev/null 2>&1; then
     exit 1
   fi
 
-  echo "Installing trivy ${TRIVY_VERSION} via upstream installer..."
-  if ! curl -fsSL "https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh" \
-       | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"; then
-    echo "::warning::Upstream installer failed; trying direct GitHub release download..."
-    # Asset names Trivy has shipped across versions:
-    #   trivy_<ver>_Linux-64bit.tar.gz   (older)
-    #   trivy_<ver>_linux-64bit.tar.gz   (older, lowercase)
-    #   trivy_<ver>_linux_amd64.tar.gz   (current)
-    for asset in \
-      "trivy_${TRIVY_VERSION}_linux_amd64.tar.gz" \
-      "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-      "trivy_${TRIVY_VERSION}_linux-64bit.tar.gz"; do
-      url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${asset}"
-      echo "  trying ${url}"
-      if curl -fsSL -o /tmp/trivy.tgz "${url}"; then
-        if tar -xz -C /usr/local/bin trivy -f /tmp/trivy.tgz; then
-          rm -f /tmp/trivy.tgz
-          echo "  downloaded ${asset}"
-          break
-        fi
+  echo "Installing trivy ${TRIVY_VERSION}..."
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' EXIT
+  installed=0
+
+  # ---- Primary: direct GitHub release with checksum verification ----
+  base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+  asset="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+  if curl -fsSL -o "${tmpdir}/trivy.tar.gz" "${base}/${asset}" \
+     && curl -fsSL -o "${tmpdir}/trivy_checksums.txt" "${base}/trivy_${TRIVY_VERSION}_checksums.txt"; then
+    expected="$(awk -v a="${asset}" '$2 == a || $2 == "./"a {print $1; exit}' "${tmpdir}/trivy_checksums.txt" || true)"
+    if [ -n "${expected:-}" ]; then
+      actual="$(sha256sum "${tmpdir}/trivy.tar.gz" | awk '{print $1}')"
+      if [ "${expected}" = "${actual}" ]; then
+        tar -xz -C /usr/local/bin trivy -f "${tmpdir}/trivy.tar.gz"
+        installed=1
+        echo "  installed from ${asset} (sha256 verified)"
+      else
+        echo "::warning::sha256 mismatch for ${asset} (expected=${expected:0:12}.. actual=${actual:0:12}..)"
       fi
-    done
-    if ! command -v trivy >/dev/null 2>&1; then
-      echo "::warning::Direct download failed; falling back to apt..."
-      apt-get update && apt-get install -y wget gnupg lsb-release apt-transport-https
-      wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
-        | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-      echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
-        > /etc/apt/sources.list.d/trivy.list
-      apt-get update && apt-get install -y trivy
+    else
+      echo "::warning::No checksum entry for ${asset} in checksums.txt; skipping verification."
+      tar -xz -C /usr/local/bin trivy -f "${tmpdir}/trivy.tar.gz"
+      installed=1
+      echo "  installed from ${asset} (checksum unavailable)"
+    fi
+  else
+    echo "::warning::Direct download of ${asset} failed."
+  fi
+
+  # ---- Fallback: upstream install.sh (get.trivy.dev) ----
+  if [ "${installed}" -eq 0 ]; then
+    echo "::warning::Direct install failed; trying upstream install.sh..."
+    if curl -fsSL "https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh" \
+         | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"; then
+      installed=1
+    else
+      echo "::warning::Upstream install.sh also failed."
     fi
   fi
 
-  if ! command -v trivy >/dev/null 2>&1; then
-    echo "::error::Failed to install trivy. Set SKIP_INSTALL and pre-install, or pin TRIVY_VERSION to a release that ships an asset the install script can fetch."
+  if [ "${installed}" -eq 0 ] || ! command -v trivy >/dev/null 2>&1; then
+    echo "::error::Failed to install trivy ${TRIVY_VERSION}. Try pinning a different TRIVY_VERSION, or pre-install trivy in the runner image and set SKIP_INSTALL=1."
     exit 1
   fi
   trivy --version
