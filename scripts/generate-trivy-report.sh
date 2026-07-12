@@ -91,36 +91,74 @@ if ! command -v trivy >/dev/null 2>&1; then
 fi
 
 echo "Running Trivy filesystem scan (${SCAN_PATH}) severities=${SEVERITY}"
+
+# We always want all four output files to exist (so the artifact upload step
+# has something to upload and the AI agent has something to consume). Track
+# whether Trivy actually ran, and synthesise a placeholder report if not.
+trivy_succeeded=0
+
 # 1) SARIF for the GitHub Security tab
-trivy fs \
-  --quiet \
-  --format sarif \
-  --output "${OUT_DIR}/trivy-fs.sarif" \
-  --severity "${SEVERITY}" \
-  --no-progress \
-  "${SCAN_PATH}" || true
-
-# 2) Structured JSON — Trivy's own JSON output is richer than SARIF for diffing.
-trivy fs \
-  --quiet \
-  --format json \
-  --output "${OUT_DIR}/trivy-report.raw.json" \
-  --severity "${SEVERITY}" \
-  --no-progress \
-  "${SCAN_PATH}" || true
-
-# 3) Normalise the raw JSON into a flatter shape (used by the AI agents and
-#    the diff script) using parse-sarif.py on the SARIF (the same findings,
-#    same tool output, just easier to consume from Python).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${OUT_DIR}/trivy-fs.sarif" ] && command -v python3 >/dev/null 2>&1; then
-  python3 "${SCRIPT_DIR}/parse-sarif.py" "${OUT_DIR}/trivy-fs.sarif" --tool trivy \
-    > "${OUT_DIR}/trivy-report.json" || echo "[]" > "${OUT_DIR}/trivy-report.json"
+if trivy fs \
+     --quiet \
+     --format sarif \
+     --output "${OUT_DIR}/trivy-fs.sarif" \
+     --severity "${SEVERITY}" \
+     --no-progress \
+     "${SCAN_PATH}"; then
+  trivy_succeeded=1
+else
+  echo "::warning::Trivy SARIF scan failed; writing empty SARIF placeholder."
+  # Minimal valid SARIF 2.1.0 document so downstream tooling doesn't choke.
+  cat > "${OUT_DIR}/trivy-fs.sarif" <<'EOF'
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "trivy",
+          "version": "unknown",
+          "informationUri": "https://github.com/aquasecurity/trivy"
+        }
+      },
+      "results": []
+    }
+  ]
+}
+EOF
 fi
 
-# 4) Plain-text summary for the artifact
-if [ -f "${OUT_DIR}/trivy-report.json" ] && command -v python3 >/dev/null 2>&1; then
-python3 - "${OUT_DIR}/trivy-report.json" "${OUT_DIR}/trivy-report.txt" <<'PYEOF'
+# 2) Structured JSON — Trivy's own JSON output is richer than SARIF for diffing.
+if trivy fs \
+     --quiet \
+     --format json \
+     --output "${OUT_DIR}/trivy-report.raw.json" \
+     --severity "${SEVERITY}" \
+     --no-progress \
+     "${SCAN_PATH}"; then
+  : # success; raw JSON is in place
+else
+  echo "::warning::Trivy JSON scan failed; writing empty raw JSON placeholder."
+  echo '{"Results":[]}' > "${OUT_DIR}/trivy-report.raw.json"
+fi
+
+# 3) Normalise the SARIF into a flatter shape (used by the AI agents and
+#    the diff script). Always produces trivy-report.json, even on failure.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${OUT_DIR}/trivy-fs.sarif" ] && command -v python3 >/dev/null 2>&1; then
+  if ! python3 "${SCRIPT_DIR}/parse-sarif.py" "${OUT_DIR}/trivy-fs.sarif" --tool trivy \
+       > "${OUT_DIR}/trivy-report.json" 2>"${OUT_DIR}/trivy-parse.log"; then
+    echo "::warning::parse-sarif.py failed; writing empty trivy-report.json. See trivy-parse.log."
+    echo "[]" > "${OUT_DIR}/trivy-report.json"
+  fi
+else
+  echo "[]" > "${OUT_DIR}/trivy-report.json"
+fi
+
+# 4) Plain-text summary for the artifact — always produced, even on failure.
+if command -v python3 >/dev/null 2>&1; then
+  if ! python3 - "${OUT_DIR}/trivy-report.json" "${OUT_DIR}/trivy-report.txt" <<'PYEOF'
 import json, sys
 from collections import Counter
 from pathlib import Path
@@ -175,10 +213,40 @@ if len(findings) > 30:
     lines.append(f"... and {len(findings) - 30} more (see trivy-report.json)")
 dst.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PYEOF
+  then
+    :
+  else
+    echo "::warning::Failed to render trivy-report.txt; writing placeholder."
+    cat > "${OUT_DIR}/trivy-report.txt" <<'TXT'
+Trivy Filesystem Scan Summary
+=============================
+
+Total findings: 0
+(summary rendering failed — see trivy-parse.log)
+TXT
+  fi
+else
+  echo "Trivy scan produced no output (python3 not available to render summary)" > "${OUT_DIR}/trivy-report.txt"
 fi
 
 # 5) Always print a short summary to the run log
 echo "Trivy scan complete. Findings:"
 if [ -f "${OUT_DIR}/trivy-report.json" ]; then
-  python3 -c "import json,sys; d=json.load(open('${OUT_DIR}/trivy-report.json')); s={}; [s.update({x.get('severity','UNKNOWN'):s.get(x.get('severity','UNKNOWN'),0)+1}) for x in d]; print('  CRITICAL=%d HIGH=%d MEDIUM=%d LOW=%d UNKNOWN=%d TOTAL=%d' % (s.get('CRITICAL',0),s.get('HIGH',0),s.get('MEDIUM',0),s.get('LOW',0),s.get('UNKNOWN',0),len(d)))"
+  python3 -c "import json,sys; d=json.load(open('${OUT_DIR}/trivy-report.json')); s={}; [s.update({x.get('severity','UNKNOWN'):s.get(x.get('severity','UNKNOWN'),0)+1}) for x in d]; print('  CRITICAL=%d HIGH=%d MEDIUM=%d LOW=%d UNKNOWN=%d TOTAL=%d' % (s.get('CRITICAL',0),s.get('HIGH',0),s.get('MEDIUM',0),s.get('LOW',0),s.get('UNKNOWN',0),len(d)))" 2>/dev/null || echo "  (summary unavailable)"
 fi
+
+# 6) Final safety net: assert all four expected output files exist. If any
+#    are missing for any reason, create empty placeholders so the upload
+#    step never reports "No files were found".
+for f in trivy-report.json trivy-report.txt trivy-fs.sarif trivy-report.raw.json; do
+  if [ ! -s "${OUT_DIR}/${f}" ]; then
+    echo "::warning::${f} missing or empty; writing placeholder."
+    case "${f}" in
+      *.sarif)    echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"trivy"}},"results":[]}]}' > "${OUT_DIR}/${f}" ;;
+      *.json)     echo '[]' > "${OUT_DIR}/${f}" ;;
+      *.txt)      echo "Trivy scan produced no output (${f} is a placeholder)." > "${OUT_DIR}/${f}" ;;
+    esac
+  fi
+done
+echo "Trivy outputs in ${OUT_DIR}:"
+ls -la "${OUT_DIR}/trivy-"* 2>/dev/null || true
