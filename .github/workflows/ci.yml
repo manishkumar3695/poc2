@@ -927,12 +927,12 @@ jobs:
   # 11. DEPLOY
   # ---------------------------------------------------------------
   deploy:
-    name: "11. Deploy to ${{ env.DEPLOY_ENV }}"
+    name: "11. Deploy"
     runs-on: ubuntu-latest
     needs: [check-deploy-gates]
     if: ${{ needs.check-deploy-gates.outputs.deploy_recommended == 'True' }}
     environment:
-      name: ${{ env.DEPLOY_ENV }}
+      name: ${{ github.event.inputs.environment || vars.DEPLOY_ENV || 'dev' }}
       url: ${{ steps.deploy.outputs.deploy_url }}
     permissions:
       contents: read
@@ -967,15 +967,16 @@ jobs:
       - name: Build deployable JAR
         run: mvn -B -ntp -DskipTests -Dmaven.javadoc.skip=true package
 
-      - name: "🚢 Deploy to ${{ env.DEPLOY_ENV }}"
+      - name: "🚢 Deploy"
         id: deploy
         env:
           # Add the transport-specific secrets you need here, e.g.:
           # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, KUBE_CONFIG, AZURE_CREDENTIALS, etc.
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          DEPLOY_ENV: ${{ github.event.inputs.environment || vars.DEPLOY_ENV || 'dev' }}
         run: |
           set -e
-          ENV="${{ env.DEPLOY_ENV }}"
+          ENV="${DEPLOY_ENV}"
           echo "::notice::Deploying to ${ENV}"
           echo "Target JAR: $(ls -1 target/*.jar 2>/dev/null | head -n 1 || echo 'no jar')"
           # ---------------------------------------------------------
