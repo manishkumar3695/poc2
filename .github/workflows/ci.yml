@@ -262,6 +262,7 @@ jobs:
         with:
           name: coverage-build-output
           path: target/
+          if-no-files-found: warn
 
       - name: SonarCloud scan
         if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
@@ -389,6 +390,7 @@ jobs:
         with:
           name: coverage-build-output
           path: target/
+          if-no-files-found: warn
 
       - name: Stage jacoco + junit for the AI agent
         run: |
@@ -677,6 +679,7 @@ jobs:
         with:
           name: rebuild-output
           path: target/
+          if-no-files-found: warn
 
       - name: SonarCloud re-scan
         if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
