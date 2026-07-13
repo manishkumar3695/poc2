@@ -1,0 +1,45 @@
+Produce safe, minimal patches for the following security findings.
+Coverage threshold is irrelevant here; fix the code, not the tests.
+Severity scale: CRITICAL > HIGH > MEDIUM > LOW > INFO.
+
+===== FINDINGS (sorted by severity, capped at 20) =====
+- id=SR-001 sev=CRITICAL file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2026-41293
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 9.0.118, 10.1.55, 11.0.22
+- id=SR-002 sev=CRITICAL file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2026-43512
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 9.0.118, 10.1.55, 11.0.22
+- id=SR-003 sev=CRITICAL file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2026-43515
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 9.0.118, 10.1.55, 11.0.22
+- id=SR-004 sev=CRITICAL file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2025-66614
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 11.0.15, 10.1.50, 9.0.113
+- id=SR-005 sev=CRITICAL file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2025-55754
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 11.0.11, 10.1.45, 9.0.109
+- id=SR-006 sev=CRITICAL file=org.springframework.security:spring-security-web line=1 rule_id=CVE-2026-22732
+  evidence: 
+  suggested_fix: Upgrade org.springframework.security:spring-security-web to 6.5.9, 7.0.4
+- id=SR-007 sev=HIGH file=com.fasterxml.jackson.core:jackson-databind line=1 rule_id=CVE-2026-54512
+  evidence: 
+  suggested_fix: Upgrade com.fasterxml.jackson.core:jackson-databind to 2.18.8, 3.1.4, 2.21.4
+- id=SR-008 sev=HIGH file=com.fasterxml.jackson.core:jackson-databind line=1 rule_id=CVE-2026-54513
+  evidence: 
+  suggested_fix: Upgrade com.fasterxml.jackson.core:jackson-databind to 2.18.8, 2.21.4, 3.1.4
+- id=SR-009 sev=HIGH file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2025-48989
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 11.0.10, 10.1.44, 9.0.108
+- id=SR-010 sev=HIGH file=org.apache.tomcat.embed:tomcat-embed-core line=1 rule_id=CVE-2025-52520
+  evidence: 
+  suggested_fix: Upgrade org.apache.tomcat.embed:tomcat-embed-core to 11.0.9, 10.1.43, 9.0.107
+
+===== CURRENT FILE CONTENTS =====
+
+----- org.apache.tomcat.embed:tomcat-embed-core (NOT FOUND on disk) -----
+
+----- org.springframework.security:spring-security-web (NOT FOUND on disk) -----
+
+----- com.fasterxml.jackson.core:jackson-databind (NOT FOUND on disk) -----
+
+Return ONLY the JSON object. No commentary, no markdown fences.
