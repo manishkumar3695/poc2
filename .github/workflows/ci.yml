@@ -401,16 +401,21 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # CodeQL needs a compilable class graph. -DskipTests keeps the build
-      # fast; tests are run in the `unit-test` job.
-      - name: Build (compile only, for CodeQL)
-        run: mvn -B -ntp -DskipTests -Dmaven.javadoc.skip=true package
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: java
           queries: security-extended,security-and-quality
+
+      # Build between init and analyze so the CodeQL tracer can observe
+      # the Maven build and produce a class graph. -DskipTests keeps it
+      # fast; the `unit-test` job is the source of truth for test runs.
+      # Running the build BEFORE init (the previous layout) left the
+      # tracer with nothing to trace, and `codeql database finalize`
+      # then aborted with "CodeQL detected code written in Java/Kotlin
+      # but could not process any of it".
+      - name: Build (compile only, for CodeQL)
+        run: mvn -B -ntp -DskipTests -Dmaven.javadoc.skip=true package
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
