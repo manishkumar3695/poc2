@@ -1,62 +1,55 @@
 {
-  "patches": [
-    {
-      "file": "pom.xml",
-      "new_content": "<!-- FIX_LLM_APPLIED: CVE-2026-41293 -->\n<dependency>\n  <groupId>org.apache.tomcat.embed</groupId>\n  <artifactId>tomcat-embed-core</artifactId>\n  <version>11.0.22</version>\n</dependency>\n",
-      "rule_id": "CVE-2026-41293",
-      "finding_id": "SR-001",
-      "description": "Upgrade org.apache.tomcat.embed:tomcat-embed-core to 11.0.22"
-    },
-    {
-      "file": "pom.xml",
-      "new_content": "<!-- FIX_LLM_APPLIED: CVE-2026-22732 -->\n<dependency>\n  <groupId>org.springframework.security</groupId>\n  <artifactId>spring-security-web</artifactId>\n  <version>7.0.4</version>\n</dependency>\n",
-      "rule_id": "CVE-2026-22732",
-      "finding_id": "SR-006",
-      "description": "Upgrade org.springframework.security:spring-security-web to 7.0.4"
-    },
-    {
-      "file": "pom.xml",
-      "new_content": "<!-- FIX_LLM_APPLIED: CVE-2026-54512 -->\n<dependency>\n  <groupId>com.fasterxml.jackson.core</groupId>\n  <artifactId>jackson-databind</artifactId>\n  <version>3.1.4</version>\n</dependency>\n",
-      "rule_id": "CVE-2026-54512",
-      "finding_id": "SR-007",
-      "description": "Upgrade com.fasterxml.jackson.core:jackson-databind to 3.1.4"
-    }
-  ],
+  "patches": [],
   "skipped": [
     {
+      "finding_id": "SR-001",
+      "rule_id": "CVE-2026-22732",
+      "reason": "File not found on disk"
+    },
+    {
       "finding_id": "SR-002",
-      "rule_id": "CVE-2026-43512",
-      "reason": "Duplicate finding, already fixed by SR-001"
+      "rule_id": "CVE-2026-54512",
+      "reason": "File not found on disk"
     },
     {
       "finding_id": "SR-003",
-      "rule_id": "CVE-2026-43515",
-      "reason": "Duplicate finding, already fixed by SR-001"
+      "rule_id": "CVE-2026-54513",
+      "reason": "File not found on disk"
     },
     {
       "finding_id": "SR-004",
-      "rule_id": "CVE-2025-66614",
-      "reason": "Duplicate finding, already fixed by SR-001"
+      "rule_id": "CVE-2026-40973",
+      "reason": "File not found on disk"
     },
     {
       "finding_id": "SR-005",
-      "rule_id": "CVE-2025-55754",
-      "reason": "Duplicate finding, already fixed by SR-001"
+      "rule_id": "CVE-2025-41249",
+      "reason": "File not found on disk"
+    },
+    {
+      "finding_id": "SR-006",
+      "rule_id": "CVE-2026-27456",
+      "reason": "File not found on disk"
+    },
+    {
+      "finding_id": "SR-007",
+      "rule_id": "CVE-2026-41991",
+      "reason": "File not found on disk"
     },
     {
       "finding_id": "SR-008",
-      "rule_id": "CVE-2026-54513",
-      "reason": "Duplicate finding, already fixed by SR-007"
+      "rule_id": "CVE-2026-41992",
+      "reason": "File not found on disk"
     },
     {
       "finding_id": "SR-009",
-      "rule_id": "CVE-2025-48989",
-      "reason": "Duplicate finding, already fixed by SR-001"
+      "rule_id": "CVE-2026-27456",
+      "reason": "File not found on disk"
     },
     {
       "finding_id": "SR-010",
-      "rule_id": "CVE-2025-52520",
-      "reason": "Duplicate finding, already fixed by SR-001"
+      "rule_id": "CVE-2026-4046",
+      "reason": "File not found on disk"
     }
   ]
 }

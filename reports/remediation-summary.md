@@ -1,22 +1,31 @@
 # AI Auto-Remediation Summary
 
-- **Status:** OK
-- **Safe fixes applied:** 1 (deterministic: 0, LLM: 1)
-- **Files changed:** 1
+- **Status:** NO_CHANGES
+- **Safe fixes applied:** 0 (deterministic: 0, LLM: 0)
+- **Files changed:** 13
 
 ## Fixed (deterministic)
 
 - (none)
-
-## Fixed (LLM-generated)
-
-- [CVE-2026-41293] `pom.xml` — Upgrade org.apache.tomcat.embed:tomcat-embed-core to 11.0.22
+- No safe automated fixes were applicable.
 
 ## Diff stat
 
 ```
-pom.xml | 203 ++--------------------------------------------------------------
- 1 file changed, 6 insertions(+), 197 deletions(-)
+reports/SONAR_REPORT.md        |    8 +-
+ reports/llm-prompt.txt         |   54 +-
+ reports/llm-response.txt       |   61 +-
+ reports/security-report.json   |  136 +--
+ reports/security-review.json   |  136 +--
+ reports/security-review.md     |  118 +--
+ reports/security-summary.txt   |   22 +-
+ reports/sonar-report.json      |    6 +-
+ reports/trivy-image.raw.json   | 1846 +++++--------------------------------
+ reports/trivy-image.sarif      | 1988 ++++++++++------------------------------
+ reports/trivy-image.sarif.json |  270 ------
+ reports/trivy-report.json      |  288 ------
+ reports/trivy-report.txt       |   50 +-
+ 13 files changed, 999 insertions(+), 3984 deletions(-)
 ```
 
 ## Reviewer checklist

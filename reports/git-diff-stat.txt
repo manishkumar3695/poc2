@@ -1,2 +1,14 @@
- pom.xml | 203 ++--------------------------------------------------------------
- 1 file changed, 6 insertions(+), 197 deletions(-)
+ reports/SONAR_REPORT.md        |    8 +-
+ reports/llm-prompt.txt         |   54 +-
+ reports/llm-response.txt       |   61 +-
+ reports/security-report.json   |  136 +--
+ reports/security-review.json   |  136 +--
+ reports/security-review.md     |  118 +--
+ reports/security-summary.txt   |   22 +-
+ reports/sonar-report.json      |    6 +-
+ reports/trivy-image.raw.json   | 1846 +++++--------------------------------
+ reports/trivy-image.sarif      | 1988 ++++++++++------------------------------
+ reports/trivy-image.sarif.json |  270 ------
+ reports/trivy-report.json      |  288 ------
+ reports/trivy-report.txt       |   50 +-
+ 13 files changed, 999 insertions(+), 3984 deletions(-)

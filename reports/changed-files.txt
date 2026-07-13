@@ -1,1 +1,13 @@
-pom.xml
+reports/SONAR_REPORT.md
+reports/llm-prompt.txt
+reports/llm-response.txt
+reports/security-report.json
+reports/security-review.json
+reports/security-review.md
+reports/security-summary.txt
+reports/sonar-report.json
+reports/trivy-image.raw.json
+reports/trivy-image.sarif
+reports/trivy-image.sarif.json
+reports/trivy-report.json
+reports/trivy-report.txt

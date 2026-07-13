@@ -1,44 +1,29 @@
 Trivy Scan Summary (filesystem + image)
 ========================================
 
-Total findings: 90
+Total findings: 72
 
 By severity:
-  CRITICAL  6
-  HIGH      14
-  MEDIUM    40
-  LOW       30
+  CRITICAL  1
+  HIGH      4
+  MEDIUM    38
+  LOW       29
   UNKNOWN   0
 
 By scanner:
   fs        0
-  image     90
+  image     72
 
 By category:
-  vulnerability   90
+  vulnerability   72
 
 Top 30 findings (sorted by severity, then by file):
 -------------------------------------------------
 [CRITICAL] image vulnerability CVE-2026-22732     org.springframework.security:spring-security-web@6.3.10 -> 6.5.9, 7.0.4  -- app/app.jar/BOOT-INF/lib/spring-security-web-6.3.10.jar:1
-[CRITICAL] image vulnerability CVE-2026-41293     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.118, 10.1.55, 11.0.22  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[CRITICAL] image vulnerability CVE-2026-43512     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.118, 10.1.55, 11.0.22  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[CRITICAL] image vulnerability CVE-2026-43515     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.118, 10.1.55, 11.0.22  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[CRITICAL] image vulnerability CVE-2025-66614     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.15, 10.1.50, 9.0.113  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[CRITICAL] image vulnerability CVE-2025-55754     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.11, 10.1.45, 9.0.109  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
 [HIGH    ] image vulnerability CVE-2026-54512     com.fasterxml.jackson.core:jackson-databind@2.17.3 -> 2.18.8, 3.1.4, 2.21.4  -- app/app.jar/BOOT-INF/lib/jackson-databind-2.17.3.jar:1
 [HIGH    ] image vulnerability CVE-2026-54513     com.fasterxml.jackson.core:jackson-databind@2.17.3 -> 2.18.8, 2.21.4, 3.1.4  -- app/app.jar/BOOT-INF/lib/jackson-databind-2.17.3.jar:1
 [HIGH    ] image vulnerability CVE-2026-40973     org.springframework.boot:spring-boot@3.3.13 -> 4.0.6, 3.5.14  -- app/app.jar/BOOT-INF/lib/spring-boot-3.3.13.jar:1
 [HIGH    ] image vulnerability CVE-2025-41249     org.springframework:spring-core@6.1.21 -> 6.2.11  -- app/app.jar/BOOT-INF/lib/spring-core-6.1.21.jar:1
-[HIGH    ] image vulnerability CVE-2025-48989     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.10, 10.1.44, 9.0.108  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2025-52520     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.9, 10.1.43, 9.0.107  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2025-53506     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.107, 10.1.43, 11.0.9  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2025-55752     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.11, 10.1.45, 9.0.109  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2026-24734     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.18, 10.1.52, 9.0.115  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2026-24880     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.116, 10.1.52, 11.0.20  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2026-34483     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.116, 10.1.54, 11.0.21  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2026-41284     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.118, 10.1.55, 11.0.22  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2026-42498     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.118, 10.1.55, 11.0.22  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[HIGH    ] image vulnerability CVE-2026-43513     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.118, 10.1.55, 11.0.22  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
 [MEDIUM  ] image vulnerability                    com.fasterxml.jackson.core:jackson-core@2.17.3 -> 2.21.1, 2.18.6  -- app/app.jar/BOOT-INF/lib/jackson-core-2.17.3.jar:1
 [MEDIUM  ] image vulnerability CVE-2026-54514     com.fasterxml.jackson.core:jackson-databind@2.17.3 -> 2.18.8, 2.21.4, 3.1.4  -- app/app.jar/BOOT-INF/lib/jackson-databind-2.17.3.jar:1
 [MEDIUM  ] image vulnerability CVE-2026-54515     com.fasterxml.jackson.core:jackson-databind@2.17.3 -> 3.1.4, 2.18.9, 2.21.5, 2.22.1  -- app/app.jar/BOOT-INF/lib/jackson-databind-2.17.3.jar:1
@@ -47,7 +32,22 @@ Top 30 findings (sorted by severity, then by file):
 [MEDIUM  ] image vulnerability CVE-2025-41242     org.springframework:spring-webmvc@6.1.21 -> 6.2.10  -- app/app.jar/BOOT-INF/lib/spring-webmvc-6.1.21.jar:1
 [MEDIUM  ] image vulnerability CVE-2026-22737     org.springframework:spring-webmvc@6.1.21 -> 7.0.6, 6.2.17  -- app/app.jar/BOOT-INF/lib/spring-webmvc-6.1.21.jar:1
 [MEDIUM  ] image vulnerability CVE-2026-22745     org.springframework:spring-webmvc@6.1.21 -> 7.0.7, 6.2.18  -- app/app.jar/BOOT-INF/lib/spring-webmvc-6.1.21.jar:1
-[MEDIUM  ] image vulnerability CVE-2026-25854     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 9.0.116, 10.1.53, 11.0.20  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
-[MEDIUM  ] image vulnerability CVE-2025-61795     org.apache.tomcat.embed:tomcat-embed-core@10.1.42 -> 11.0.12, 10.1.47, 9.0.110  -- app/app.jar/BOOT-INF/lib/tomcat-embed-core-10.1.42.jar:1
+[MEDIUM  ] image vulnerability CVE-2026-27456     bsdutils@1:2.37.2-4ubuntu3.5 -> Link: [CVE-2026-27456](https://avd.aquasec.com/nvd/cve-2026-27456)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-41991     gzip@1.10-4ubuntu4.1 -> 1.10-4ubuntu4.2  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-41992     gzip@1.10-4ubuntu4.1 -> 1.10-4ubuntu4.2  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-27456     libblkid1@2.37.2-4ubuntu3.5 -> Link: [CVE-2026-27456](https://avd.aquasec.com/nvd/cve-2026-27456)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-4046      libc-bin@2.35-0ubuntu3.13 -> Link: [CVE-2026-4046](https://avd.aquasec.com/nvd/cve-2026-4046)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-5435      libc-bin@2.35-0ubuntu3.13 -> Link: [CVE-2026-5435](https://avd.aquasec.com/nvd/cve-2026-5435)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-6238      libc-bin@2.35-0ubuntu3.13 -> Link: [CVE-2026-6238](https://avd.aquasec.com/nvd/cve-2026-6238)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-4046      libc6@2.35-0ubuntu3.13 -> Link: [CVE-2026-4046](https://avd.aquasec.com/nvd/cve-2026-4046)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-5435      libc6@2.35-0ubuntu3.13 -> Link: [CVE-2026-5435](https://avd.aquasec.com/nvd/cve-2026-5435)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-6238      libc6@2.35-0ubuntu3.13 -> Link: [CVE-2026-6238](https://avd.aquasec.com/nvd/cve-2026-6238)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2025-66382     libexpat1@2.4.7-1ubuntu0.7 -> Link: [CVE-2025-66382](https://avd.aquasec.com/nvd/cve-2025-66382)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-27456     libmount1@2.37.2-4ubuntu3.5 -> Link: [CVE-2026-27456](https://avd.aquasec.com/nvd/cve-2026-27456)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-58055     libnghttp2-14@1.43.0-1ubuntu0.3 -> 1.43.0-1ubuntu0.4  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-13757     libp11-kit0@0.24.0-6build1 -> Link: [CVE-2026-13757](https://avd.aquasec.com/nvd/cve-2026-13757)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-40930     libpng16-16@1.6.37-3ubuntu0.5 -> Link: [CVE-2026-40930](https://avd.aquasec.com/nvd/cve-2026-40930)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-27456     libsmartcols1@2.37.2-4ubuntu3.5 -> Link: [CVE-2026-27456](https://avd.aquasec.com/nvd/cve-2026-27456)  -- library/vulnerable-spring-app:1
+[MEDIUM  ] image vulnerability CVE-2026-27456     libuuid1@2.37.2-4ubuntu3.5 -> Link: [CVE-2026-27456](https://avd.aquasec.com/nvd/cve-2026-27456)  -- library/vulnerable-spring-app:1
 
-... and 60 more (see trivy-report.json)
+... and 42 more (see trivy-report.json)
