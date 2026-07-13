@@ -247,6 +247,14 @@ jobs:
       contents: read
       pull-requests: read
       security-events: write
+    # Job-level env so the if: conditions below can read SONAR_TOKEN (which
+    # is only available via the secrets context inside step env blocks, not
+    # in workflow-level if: expressions). The token is still scoped to this
+    # job and never echoed to the workflow env or to other jobs.
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || secrets.SONAR_ORGANIZATION }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -284,11 +292,7 @@ jobs:
 
         continue-on-error: true
       - name: SonarCloud scan
-        # `secrets.SONAR_TOKEN` evaluates to an empty string when the secret
-        # is not configured, which is exactly what we want here. The previous
-        # form `env.SONAR_TOKEN != ''` was always false because SONAR_TOKEN
-        # is only injected into the per-step env block, never the job env.
-        if: ${{ secrets.SONAR_TOKEN != '' && vars.SONAR_PROJECT_KEY != '' && secrets.SONAR_PROJECT_KEY != '' && vars.SONAR_ORGANIZATION != '' && secrets.SONAR_ORGANIZATION != '' }}
+        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
         id: sonar
         continue-on-error: false
         env:
@@ -306,7 +310,7 @@ jobs:
             -Dsonar.host.url=${SONAR_HOST_URL}
 
       - name: SonarCloud scan (skipped — missing secrets)
-        if: ${{ secrets.SONAR_TOKEN == '' || (vars.SONAR_PROJECT_KEY == '' && secrets.SONAR_PROJECT_KEY == '') || (vars.SONAR_ORGANIZATION == '' && secrets.SONAR_ORGANIZATION == '') }}
+        if: env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || env.SONAR_ORGANIZATION == ''
         run: |
           set -euo pipefail
           mkdir -p "$REPORT_DIR"
@@ -336,7 +340,7 @@ jobs:
       # returns ERROR or FAILED. Reads projectKey/host from the scanner's
       # output (no extra config needed).
       - name: SonarCloud Quality Gate
-        if: ${{ secrets.SONAR_TOKEN != '' && steps.sonar.conclusion == 'success' }}
+        if: env.SONAR_TOKEN != '' && steps.sonar.conclusion == 'success'
         uses: sonarsource/sonarqube-quality-gate-action@v1
         with:
           failOnQualityGateError: true
@@ -827,6 +831,12 @@ jobs:
       contents: read
       pull-requests: read
       security-events: write
+    # See sonarcloud-scan for why this job-level env exists (so if:
+    # expressions can read SONAR_TOKEN).
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || secrets.SONAR_PROJECT_KEY }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || secrets.SONAR_ORGANIZATION }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -865,7 +875,7 @@ jobs:
 
         continue-on-error: true
       - name: SonarCloud re-scan
-        if: ${{ secrets.SONAR_TOKEN != '' && (vars.SONAR_PROJECT_KEY != '' || secrets.SONAR_PROJECT_KEY != '') && (vars.SONAR_ORGANIZATION != '' || secrets.SONAR_ORGANIZATION != '') }}
+        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         uses: sonarsource/sonarqube-scan-action@v3
@@ -882,7 +892,7 @@ jobs:
             -Dsonar.junit.reportPaths=target/surefire-reports
 
       - name: SonarCloud re-scan (skipped)
-        if: ${{ secrets.SONAR_TOKEN == '' || (vars.SONAR_PROJECT_KEY == '' && secrets.SONAR_PROJECT_KEY == '') || (vars.SONAR_ORGANIZATION == '' && secrets.SONAR_ORGANIZATION == '') }}
+        if: env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || env.SONAR_ORGANIZATION == ''
         run: |
           set -euo pipefail
           mkdir -p reports
