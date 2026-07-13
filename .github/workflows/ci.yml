@@ -284,7 +284,11 @@ jobs:
 
         continue-on-error: true
       - name: SonarCloud scan
-        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
+        # `secrets.SONAR_TOKEN` evaluates to an empty string when the secret
+        # is not configured, which is exactly what we want here. The previous
+        # form `env.SONAR_TOKEN != ''` was always false because SONAR_TOKEN
+        # is only injected into the per-step env block, never the job env.
+        if: ${{ secrets.SONAR_TOKEN != '' && vars.SONAR_PROJECT_KEY != '' && secrets.SONAR_PROJECT_KEY != '' && vars.SONAR_ORGANIZATION != '' && secrets.SONAR_ORGANIZATION != '' }}
         id: sonar
         continue-on-error: false
         env:
@@ -302,11 +306,13 @@ jobs:
             -Dsonar.host.url=${SONAR_HOST_URL}
 
       - name: SonarCloud scan (skipped — missing secrets)
-        if: env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || env.SONAR_ORGANIZATION == ''
+        if: ${{ secrets.SONAR_TOKEN == '' || (vars.SONAR_PROJECT_KEY == '' && secrets.SONAR_PROJECT_KEY == '') || (vars.SONAR_ORGANIZATION == '' && secrets.SONAR_ORGANIZATION == '') }}
         run: |
+          set -euo pipefail
           mkdir -p "$REPORT_DIR"
           echo "SKIPPED" > "$REPORT_DIR/sonar-quality-gate.txt"
-          echo "::warning::SonarCloud scan skipped: SONAR_TOKEN, SONAR_PROJECT_KEY or SONAR_ORGANIZATION not set."
+          echo "::error::SonarCloud scan skipped: SONAR_TOKEN, SONAR_PROJECT_KEY or SONAR_ORGANIZATION not set. Configure them in Settings → Secrets and variables → Actions."
+          exit 1
 
       # Generate the report BEFORE the QG wait so the artifacts still upload
       # on QG failure (the upload step is `if: always()`).
@@ -330,7 +336,7 @@ jobs:
       # returns ERROR or FAILED. Reads projectKey/host from the scanner's
       # output (no extra config needed).
       - name: SonarCloud Quality Gate
-        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != '' && steps.sonar.conclusion == 'success'
+        if: ${{ secrets.SONAR_TOKEN != '' && steps.sonar.conclusion == 'success' }}
         uses: sonarsource/sonarqube-quality-gate-action@v1
         with:
           failOnQualityGateError: true
@@ -393,13 +399,35 @@ jobs:
       - name: Copy CodeQL SARIF to reports/
         if: always()
         run: |
+          set -euo pipefail
           mkdir -p reports
-          # `codeql-action/analyze@v3` uploads to the Security tab by
-          # category=codeql; mirror the file to a known path so the
-          # deploy-gates job can download + parse it.
-          FIRST=$(find . -path ./.git -prune -o -name "codeql*.sarif" -print 2>/dev/null | head -n 1 || echo "")
+          # codeql-action/analyze@v3 writes the per-language SARIF to
+          # ${RUNNER_TEMP}/codeql_databases/<lang>/results.sarif by default
+          # (db-location defaults to ${{ runner.temp }}/codeql_databases).
+          # Try that path first, then fall back to the workspace, then a
+          # broader search.
+          FIRST=""
+          for root in "$RUNNER_TEMP/codeql_databases" "$GITHUB_WORKSPACE/codeql_databases" "."; do
+            [ -d "$root" ] || continue
+            CAND=$(find "$root" -name "results.sarif" 2>/dev/null | head -n 1 || true)
+            if [ -n "$CAND" ] && [ -f "$CAND" ]; then
+              FIRST="$CAND"
+              break
+            fi
+          done
+          if [ -z "$FIRST" ]; then
+            # Last resort: any *.sarif in the workspace.
+            FIRST=$(find "$GITHUB_WORKSPACE" -path '*/.git' -prune -o -name "*.sarif" -print 2>/dev/null | head -n 1 || true)
+          fi
           if [ -n "$FIRST" ] && [ -f "$FIRST" ]; then
             cp "$FIRST" reports/codeql-results.sarif
+            echo "Copied $FIRST -> reports/codeql-results.sarif"
+          else
+            echo "::warning::No CodeQL SARIF found; the deploy-gates CodeQL checks will be empty."
+            # Touch an empty placeholder so the upload step doesn't fail when
+            # `if-no-files-found: error` is set. The gate script tolerates
+            # missing/invalid SARIF (treats as 0 critical, 0 high).
+            echo '{"runs":[]}' > reports/codeql-results.sarif
           fi
 
       - name: Upload CodeQL results
@@ -837,7 +865,7 @@ jobs:
 
         continue-on-error: true
       - name: SonarCloud re-scan
-        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != ''
+        if: ${{ secrets.SONAR_TOKEN != '' && (vars.SONAR_PROJECT_KEY != '' || secrets.SONAR_PROJECT_KEY != '') && (vars.SONAR_ORGANIZATION != '' || secrets.SONAR_ORGANIZATION != '') }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         uses: sonarsource/sonarqube-scan-action@v3
@@ -854,10 +882,12 @@ jobs:
             -Dsonar.junit.reportPaths=target/surefire-reports
 
       - name: SonarCloud re-scan (skipped)
-        if: env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || env.SONAR_ORGANIZATION == ''
+        if: ${{ secrets.SONAR_TOKEN == '' || (vars.SONAR_PROJECT_KEY == '' && secrets.SONAR_PROJECT_KEY == '') || (vars.SONAR_ORGANIZATION == '' && secrets.SONAR_ORGANIZATION == '') }}
         run: |
+          set -euo pipefail
           mkdir -p reports
-          echo "::warning::SonarCloud re-scan skipped (missing secrets)."
+          echo "::error::SonarCloud re-scan skipped (missing secrets)."
+          exit 1
 
       - name: Generate post-fix Sonar report
         if: always()
