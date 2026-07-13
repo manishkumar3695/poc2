@@ -558,6 +558,162 @@ _LLM_MAX_BYTES_PER_CALL = 256 * 1024
 _LLM_MAX_FILE_BYTES = 8 * 1024
 
 
+# Per-file-kind marker-comment syntax. The remediation prompt tells the
+# LLM which syntax to use for each target file, but LLMs are not reliable
+# at inferring the right marker from context — `pom.xml` kept ending up
+# with `// FIX_LLM_APPLIED: ...` lines written outside the closing tag
+# because the prompt only mentioned the `//` form. We classify the file
+# here and, if the LLM wrote a marker with the wrong syntax, strip it
+# (and, when the kind has a real marker syntax, replace it with the
+# correct one) before writing to disk.
+#
+# Each value is the marker line we'll insert on a successful patch:
+#   - "code_line" uses `//`     (Java, JavaScript, TypeScript, C, C++, Go, etc.)
+#   - "code_hash" uses `#`      (Python, Ruby, shell, YAML, TOML, Dockerfile,
+#                                .properties, .gradle)
+#   - "xml"       uses <!-- -->  (pom.xml, applicationContext.xml, *.html,
+#                                Markdown's HTML-comment support)
+#   - "json"      has no marker  (JSON doesn't support comments and inserting
+#                                a `_marker` key is fragile across schemas;
+#                                idempotency for JSON is provided by the file
+#                                content hash + the LLM's "new_content ==
+#                                current" check above)
+#
+# The mapping is keyed on the lowercased file extension (or, for the
+# Dockerfile / pom.xml cases, the basename).
+_MARKER_KIND_BY_EXT: dict[str, str] = {
+    # code_line (`//`)
+    "java": "code_line", "js": "code_line", "mjs": "code_line", "cjs": "code_line",
+    "ts": "code_line", "tsx": "code_line", "jsx": "code_line",
+    "c": "code_line", "h": "code_line", "cpp": "code_line", "hpp": "code_line",
+    "cc": "code_line", "cs": "code_line", "go": "code_line", "swift": "code_line",
+    "kt": "code_line", "kts": "code_line", "scala": "code_line", "rs": "code_line",
+    # code_hash (`#`)
+    "py": "code_hash", "rb": "code_hash", "sh": "code_hash", "bash": "code_hash",
+    "yaml": "code_hash", "yml": "code_hash", "toml": "code_hash",
+    "properties": "code_hash", "gradle": "code_hash", "conf": "code_hash",
+    "ini": "code_hash", "env": "code_hash",
+    # xml-style (`<!-- -->`)
+    "xml": "xml", "html": "xml", "htm": "xml", "xhtml": "xml", "md": "xml", "markdown": "xml",
+    "svg": "xml", "xsl": "xml",
+    # no marker
+    "json": "json", "jsonc": "json", "json5": "json",
+}
+# Basename overrides for extension-less or unusual filenames.
+_MARKER_KIND_BY_NAME: dict[str, str] = {
+    "pom.xml": "xml",
+    "Dockerfile": "code_hash",
+    "containerfile": "code_hash",
+    ".bashrc": "code_hash",
+    ".zshrc": "code_hash",
+}
+# Files where the LLM is allowed to write but no marker is ever written
+# (e.g. JSON), so the idempotency check must not look for a marker in
+# the current file. The patching flow still does the standard
+# "new_content == current" skip.
+_NO_MARKER_KINDS: frozenset[str] = frozenset({"json"})
+
+# Regexes for the four marker syntaxes. Used both to detect the LLM's
+# marker lines and to strip/replace them. Each pattern matches a WHOLE
+# line (with optional leading whitespace; the trailing newline is also
+# optional so markers at the very end of a file — the common case in
+# the corruption we've seen — still match).
+#
+# The rule_id capture is intentionally permissive: LLMs sometimes write
+# multiple IDs comma-separated ("CVE-2026-41293, CVE-2026-43512") or
+# append extra prose, and the stripping pass just needs to find the
+# marker line, not validate the rule_id format.
+_MARKER_LINE_RE = {
+    "code_line": re.compile(
+        r"^[ \t]*//[ \t]*FIX_LLM_APPLIED:[ \t]*([^\r\n]*)[ \t]*\r?\n?",
+        re.MULTILINE,
+    ),
+    "code_hash": re.compile(
+        r"^[ \t]*#[ \t]*FIX_LLM_APPLIED:[ \t]*([^\r\n]*)[ \t]*\r?\n?",
+        re.MULTILINE,
+    ),
+    "xml": re.compile(
+        r"^[ \t]*<!--[ \t]*FIX_LLM_APPLIED:[ \t]*([^\r\n]*?)[ \t]*-->[ \t]*\r?\n?",
+        re.MULTILINE,
+    ),
+}
+
+
+def _marker_kind_for(rel_path: str) -> str:
+    """Return the marker-comment kind for `rel_path` ('code_line',
+    'code_hash', 'xml', or 'json')."""
+    name = rel_path.rsplit("/", 1)[-1].lower()
+    if name in _MARKER_KIND_BY_NAME:
+        return _MARKER_KIND_BY_NAME[name]
+    if "." in name:
+        ext = name.rsplit(".", 1)[-1]
+        return _MARKER_KIND_BY_EXT.get(ext, "code_hash")
+    # No extension and no special name -> default to `#` (shell-style).
+    return "code_hash"
+
+
+def _marker_line(kind: str, rule_id: str) -> str:
+    """Render a marker comment line in the given kind's syntax."""
+    rid = re.sub(r"[^A-Za-z0-9._:\-]", "_", rule_id or "llm")
+    if kind == "code_line":
+        return f"// FIX_LLM_APPLIED: {rid}\n"
+    if kind == "code_hash":
+        return f"# FIX_LLM_APPLIED: {rid}\n"
+    if kind == "xml":
+        return f"<!-- FIX_LLM_APPLIED: {rid} -->\n"
+    return ""  # 'json' (or any kind with no marker) — no line emitted
+
+
+# Pattern that matches a FIX_LLM_APPLIED marker line in ANY of the four
+# known syntaxes. Used to (a) detect the LLM's marker before deciding
+# whether to strip/replace, and (b) make the idempotency check in
+# `_apply_llm_patches` cover all three comment styles (code_line,
+# code_hash, xml). The trailing newline is optional (and there's an
+# explicit $(?!\n) so we don't eat a *following* newline that belongs to
+# the next line of content).
+_MARKER_LINE_ANY_KIND_RE = re.compile(
+    r"^[ \t]*("
+    r"//[ \t]*FIX_LLM_APPLIED:[ \t]*[^\r\n]*"
+    r"|#[ \t]*FIX_LLM_APPLIED:[ \t]*[^\r\n]*"
+    r"|<!--[ \t]*FIX_LLM_APPLIED:[ \t]*[^\r\n]*?-->[ \t]*"
+    r")[ \t]*\r?\n?",
+    re.MULTILINE,
+)
+
+
+def _strip_wrong_syntax_markers(content: str, expected_kind: str) -> tuple[str, bool]:
+    """Remove any FIX_LLM_APPLIED marker lines whose comment syntax is
+    WRONG for `expected_kind`. Returns (sanitised_content, removed_any).
+    The LLM is supposed to use the right syntax, but in practice it
+    defaults to `//` for every file, so we sanitise defensively. Lines
+    written with the *correct* syntax are left in place; the caller can
+    decide whether to add one if it's missing.
+    """
+    if expected_kind not in _MARKER_LINE_RE:
+        # 'json' / unknown: strip every marker in any syntax.
+        out = _MARKER_LINE_ANY_KIND_RE.sub("", content)
+        return out, out != content
+    expected_re = _MARKER_LINE_RE[expected_kind]
+    out_parts: list[str] = []
+    removed = False
+    pos = 0
+    for m in _MARKER_LINE_ANY_KIND_RE.finditer(content):
+        line = m.group(0)
+        if expected_re.fullmatch(line):
+            # Correct syntax — keep it in place.
+            continue
+        # Wrong syntax — drop it.
+        out_parts.append(content[pos:m.start()])
+        pos = m.end()
+        removed = True
+    out_parts.append(content[pos:])
+    return "".join(out_parts), removed
+
+
+def _has_any_marker(content: str) -> bool:
+    return bool(_MARKER_LINE_ANY_KIND_RE.search(content))
+
+
 def _is_path_writable(rel_path: str) -> bool:
     """True iff `rel_path` matches one of the whitelisted globs."""
     rel = rel_path.replace("\\", "/").lstrip("/")
@@ -667,8 +823,20 @@ RULES:
   dependencies unless the finding explicitly requires it.
 - Do not delete code that the application still needs. If you remove
   vulnerable code, replace it with a safe equivalent.
-- Add a marker comment `// FIX_LLM_APPLIED: <rule_id>` on the line
-  where the change begins so re-runs are idempotent.
+- Add a marker comment ABOVE the change so re-runs are idempotent. Use
+  the comment syntax that matches the target file type:
+    * Java / JavaScript / TypeScript / C / C++ / Go / Kotlin / Scala ->
+      `// FIX_LLM_APPLIED: <rule_id>`
+    * Python / Ruby / shell / YAML / TOML / Dockerfile / .properties /
+      Gradle -> `# FIX_LLM_APPLIED: <rule_id>`
+    * XML / pom.xml / HTML / Markdown -> `<!-- FIX_LLM_APPLIED: <rule_id> -->`
+    * JSON -> DO NOT add a marker. JSON has no comment syntax, and
+      inserting a synthetic key can break parsers. Idempotency for JSON
+      is handled by the file-content comparison.
+  CRITICAL: the marker syntax MUST match the file type. A `//` marker
+  in `pom.xml` is an XML parse error; a `//` marker in a `.properties`
+  file is invalid syntax; a `//` marker in Markdown renders as visible
+  text. If you are unsure of the file type, omit the marker.
 - Return valid JSON. Do not include any commentary outside the JSON.
 """
 
@@ -789,18 +957,48 @@ def _apply_llm_patches(repo_root: Path, raw_response: str) -> tuple[list[dict], 
             skipped.append({"rule_id": rule_id, "finding_id": finding_id,
                             "reason": "new_content is identical to current file (no change)"})
             continue
-        if f"FIX_LLM_APPLIED: {rule_id}" in current:
+        # Idempotency: any marker-syntax version of FIX_LLM_APPLIED counts.
+        if _has_any_marker(current):
             skipped.append({"rule_id": rule_id, "finding_id": finding_id,
                             "reason": "already applied (FIX_LLM_APPLIED marker present)"})
             continue
+
+        # ---- Marker sanitisation (defence in depth) ---------------------
+        # Even though the prompt tells the LLM which marker syntax to use
+        # for each file type, LLMs frequently default to `//` for every
+        # file, which breaks XML, YAML, .properties, JSON, Dockerfile, and
+        # Markdown. Strip the LLM's wrong-syntax markers here and, when
+        # the file kind has a real marker, append a correct one. For
+        # 'json' (and other kinds without a marker) we just strip.
+        kind = _marker_kind_for(rel)
+        sanitised, removed_any = _strip_wrong_syntax_markers(new_content, kind)
+        marker_added = False
+        if kind not in _NO_MARKER_KINDS:
+            if not _has_any_marker(sanitised):
+                # Make sure re-runs are idempotent. Insert the marker at
+                # the very end of the file (after the LLM's changes) so
+                # we never accidentally land inside a string literal or
+                # break the syntactic structure of the file.
+                marker = _marker_line(kind, rule_id)
+                if marker:
+                    if sanitised and not sanitised.endswith("\n"):
+                        sanitised += "\n"
+                    sanitised += marker
+                    marker_added = True
+        effective = sanitised
+        if effective == current:
+            skipped.append({"rule_id": rule_id, "finding_id": finding_id,
+                            "reason": "patch reduces to no change after marker sanitisation"})
+            continue
+
         # Write + read-back verification.
         try:
-            _write(target, new_content)
+            _write(target, effective)
         except OSError as exc:
             skipped.append({"rule_id": rule_id, "finding_id": finding_id,
                             "reason": f"write failed: {exc}"})
             continue
-        if _read(target) != new_content:
+        if _read(target) != effective:
             # Best-effort rollback: rewrite the original content.
             try:
                 _write(target, current)
@@ -818,8 +1016,19 @@ def _apply_llm_patches(repo_root: Path, raw_response: str) -> tuple[list[dict], 
             "source": "llm",
             "finding_id": finding_id,
             "safe": True,
+            "marker_kind": kind,
+            "marker_stripped": removed_any,
+            "marker_added": marker_added,
         })
-        print(f"  [llm] patched {rel} for {rule_id}", file=sys.stderr)
+        marker_action = []
+        if removed_any:
+            marker_action.append("stripped wrong-syntax markers")
+        if marker_added:
+            marker_action.append(f"added {kind} marker")
+        if marker_action:
+            print(f"  [llm] patched {rel} for {rule_id} ({'; '.join(marker_action)})", file=sys.stderr)
+        else:
+            print(f"  [llm] patched {rel} for {rule_id}", file=sys.stderr)
 
     # Merge LLM-declared skips with our own validation skips.
     for s in parsed.get("skipped", []):
@@ -857,47 +1066,100 @@ def _commit_local(repo_root: Path, message: str) -> bool:
     return True
 
 
-def _open_pr(repo_root: Path, title: str, body_path: Path, branch: str, target: str) -> str | None:
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not token or os.environ.get("SKIP_PR", "").lower() == "true":
-        return None
-    if not shutil.which("gh"):
-        return None
-    # Configure the local git identity if needed
-    _git("config", "user.email", "ai-remediator@github-actions", cwd=repo_root, check=False)
-    _git("config", "user.name", "AI Auto-Remediator", cwd=repo_root, check=False)
+def _push_to_remote(repo_root: Path, branch: str) -> bool:
+    """Push the current branch to `origin/<branch>`. Returns True on
+    success, False on failure (logs a warning to stderr).
 
-    # Make sure the branch exists locally with a tracking ref, then push it
-    # to the remote so `gh pr create` can target it.
-    _git("checkout", "-B", branch, cwd=repo_root, check=False)
-    push = _run(
-        ["git", "push", "--set-upstream", "origin", branch],
-        cwd=str(repo_root),
-        check=False,
+    Used when the AI's commit is on the workflow's trigger ref (the
+    normal case after the workflow was refactored to push back to the
+    same branch). For local/manual runs where the branch is a derived
+    `ai-remediation/<sha>` name, the push is still attempted; it just
+    won't have anything new to push if the local branch already exists
+    upstream.
+    """
+    if not shutil.which("git"):
+        return False
+    # Ensure the local git identity is set so the push isn't rejected
+    # for missing committer info (it isn't, but better safe than sorry).
+    _git("config", "user.email", "ai-remediator@github-actions",
+         cwd=repo_root, check=False)
+    _git("config", "user.name", "AI Auto-Remediator",
+         cwd=repo_root, check=False)
+    # If the local branch has no upstream yet, set one; otherwise a
+    # plain `git push` is enough.
+    upstream = _run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        cwd=str(repo_root), check=False,
     )
+    if upstream.returncode != 0:
+        push = _run(
+            ["git", "push", "--set-upstream", "origin", branch],
+            cwd=str(repo_root), check=False,
+        )
+    else:
+        push = _run(
+            ["git", "push", "origin", branch],
+            cwd=str(repo_root), check=False,
+        )
     if push.returncode != 0:
         print(
-            f"::warning::Could not push remediation branch {branch} to origin: {push.stderr}",
+            f"::warning::Could not push remediation branch {branch} to "
+            f"origin: {push.stderr}",
             file=sys.stderr,
         )
-        return None
-    _run(["gh", "auth", "setup-git"], cwd=str(repo_root), check=False)
-    # Check if a PR already exists
+        return False
+    print(f"  [git] pushed {branch} to origin", file=sys.stderr)
+    return True
+
+
+def _open_pr(repo_root: Path, title: str, body_path: Path,
+             branch: str, target: str) -> tuple[str | None, bool]:
+    """Push the branch and (optionally) open a PR.
+
+    - If `branch == target` we're already on the branch the workflow is
+      on; just push the commit back. No PR is created (the push itself
+      is the change).
+    - If `branch != target` (e.g. a manual run on a derived
+      `ai-remediation/<sha>` branch), push and then `gh pr create` as
+      before.
+    - If `SKIP_PR=true` is set in the environment, push only and skip
+      the PR step.
+
+    Returns `(pr_url, pushed)`. `pushed` is True if a push to origin
+    actually happened; the caller can record this in the remediation
+    report.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    skip_pr = os.environ.get("SKIP_PR", "").lower() == "true"
+
+    pushed = _push_to_remote(repo_root, branch)
+    if not pushed:
+        return None, False
+    if skip_pr:
+        return None, True
+    if branch == target:
+        # Already on the trigger branch — no PR to open.
+        return None, True
+    if not token or not shutil.which("gh"):
+        return None, True
+
+    # Check if a PR already exists for this head -> base pair.
     existing = _run(
-        ["gh", "pr", "list", "--head", branch, "--base", target, "--state", "open", "--json", "url", "-q", ".[] | .url"],
-        cwd=str(repo_root),
-        check=False,
+        ["gh", "pr", "list", "--head", branch, "--base", target,
+         "--state", "open", "--json", "url", "-q", ".[] | .url"],
+        cwd=str(repo_root), check=False,
     )
     if existing.stdout.strip():
-        return existing.stdout.strip().splitlines()[0]
+        return existing.stdout.strip().splitlines()[0], True
     proc = _run(
-        ["gh", "pr", "create", "--base", target, "--head", branch, "--title", title, "--body-file", str(body_path)],
-        cwd=str(repo_root),
-        check=False,
+        ["gh", "pr", "create", "--base", target, "--head", branch,
+         "--title", title, "--body-file", str(body_path)],
+        cwd=str(repo_root), check=False,
     )
     if proc.returncode != 0:
-        print(f"::warning::gh pr create failed: {proc.stderr}", file=sys.stderr)
-        return None
+        print(f"::warning::gh pr create failed: {proc.stderr}",
+              file=sys.stderr)
+        return None, True
     # `gh pr create` prints the URL on the last stdout line
     url = ""
     for line in proc.stdout.splitlines()[::-1]:
@@ -905,7 +1167,7 @@ def _open_pr(repo_root: Path, title: str, body_path: Path, branch: str, target: 
         if line.startswith("http"):
             url = line
             break
-    return url or None
+    return url or None, True
 
 
 def main() -> int:
@@ -981,8 +1243,15 @@ def main() -> int:
 
     committed = _commit_local(args.repo_root, f"AI auto-remediation: {len(all_fixes)} safe fixes")
     pr_url = None
+    pushed = False
     if committed:
-        pr_url = _open_pr(args.repo_root, "AI auto-remediation", summary_path, args.branch, args.target)
+        pr_url, pushed = _open_pr(
+            args.repo_root,
+            "AI auto-remediation",
+            summary_path,
+            args.branch,
+            args.target,
+        )
 
     report = {
         "status": "OK" if (all_fixes or not changed) else "NO_CHANGES",
@@ -990,6 +1259,7 @@ def main() -> int:
         "files_changed": changed,
         "diff_stat": diff_stat,
         "committed_locally": committed,
+        "pushed": pushed,
         "pr_url": pr_url,
         "branch": args.branch,
         "target": args.target,
@@ -999,6 +1269,8 @@ def main() -> int:
     print(f"Remediation report written to {args.reports}/remediation-report.json")
     if pr_url:
         print(f"Opened PR: {pr_url}")
+    elif pushed:
+        print(f"Pushed remediation commit to origin/{args.branch} (no PR — same branch as trigger)")
     return 0
 
 

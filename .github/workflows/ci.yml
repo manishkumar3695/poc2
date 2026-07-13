@@ -646,9 +646,14 @@ jobs:
       remediation_pr_url: ${{ steps.remediation.outputs.remediation_pr_url || '' }}
       has_fixes: ${{ steps.remediation.outputs.has_fixes || 'false' }}
     steps:
+      # For `pull_request` events the default checkout is a temporary
+      # merge ref (refs/pull/N/merge), which is not the actual PR head
+      # and can't be pushed back to. Force a checkout of the trigger
+      # ref so `git push origin <branch>` works.
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -695,9 +700,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           MIN_COVERAGE: ${{ env.MIN_COVERAGE }}
-          REMEDIATION_BRANCH: ai-remediation/${{ github.sha }}
-          REMEDIATION_TARGET: ${{ github.event.pull_request.base.ref || 'main' }}
-          SKIP_PR: ${{ github.event_name == 'pull_request' && 'true' || '' }}
+          # Push fixes back to the trigger ref (main for push, PR head for
+          # pull_request) instead of creating a separate ai-remediation/*
+          # branch. This keeps the rebuild step trivially simple — it just
+          # checks out github.ref and naturally sees the new commit.
+          REMEDIATION_BRANCH: ${{ github.ref_name }}
+          REMEDIATION_TARGET: ${{ github.event.pull_request.base.ref || github.ref_name }}
+          # Don't open a PR: for push triggers REMEDIATION_BRANCH ==
+          # REMEDIATION_TARGET so there is no PR to open. For pull_request
+          # triggers the AI's commit already lives on the PR head.
+          SKIP_PR: 'true'
         run: |
           set -euo pipefail
           python3 scripts/ai-remediation.py --repo-root . --reports reports
@@ -706,14 +718,17 @@ jobs:
             BRANCH=$(python3 -c "import json; r=json.load(open('reports/remediation-report.json')); print(r.get('branch',''))")
             PR=$(python3 -c "import json; r=json.load(open('reports/remediation-report.json')); print(r.get('pr_url') or '')")
             HAS_FIXES=$(python3 -c "import json; r=json.load(open('reports/remediation-report.json')); print('true' if r.get('fixes') else 'false')")
+            PUSHED=$(python3 -c "import json; r=json.load(open('reports/remediation-report.json')); print('true' if r.get('pushed') else 'false')")
           else
             BRANCH=""
             PR=""
             HAS_FIXES="false"
+            PUSHED="false"
           fi
           echo "remediation_branch=${BRANCH}" >> "$GITHUB_OUTPUT"
           echo "remediation_pr_url=${PR}" >> "$GITHUB_OUTPUT"
           echo "has_fixes=${HAS_FIXES}" >> "$GITHUB_OUTPUT"
+          echo "pushed=${PUSHED}" >> "$GITHUB_OUTPUT"
 
       - name: Stage remediation outputs
         if: always()
@@ -761,24 +776,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: [security-ai-remediate]
     if: ${{ always() && (needs.security-ai-remediate.result == 'success' || needs.security-ai-remediate.result == 'skipped') }}
-    outputs:
-      ref: ${{ steps.set_ref.outputs.ref }}
     steps:
-      - name: Decide which ref to check out
-        id: set_ref
-        run: |
-          # Prefer the remediation branch (already pushed by the AI agent) when
-          # the previous job produced one. Otherwise stay on the workflow ref.
-          if [ -n "${{ needs.security-ai-remediate.outputs.remediation_branch }}" ]; then
-            echo "ref=${{ needs.security-ai-remediate.outputs.remediation_branch }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
-          fi
-
+      # The AI remediation agent pushes its commit back to the trigger ref
+      # (main for push, the PR head for pull_request) instead of opening a
+      # separate ai-remediation/* branch. We therefore check out the same
+      # ref the agent pushed to. For pull_request events the default
+      # checkout is a temporary merge ref, so we have to use the head ref
+      # explicitly.
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.set_ref.outputs.ref }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 50
 
       - name: Set up JDK 21 (Temurin)
@@ -863,7 +871,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.rebuild-and-retest.outputs.ref || '' }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 0
 
       - name: Set up JDK 21 (Temurin)
@@ -985,7 +993,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.rebuild-and-retest.outputs.ref }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 0
 
       - name: Set up Docker Buildx
@@ -1086,14 +1094,12 @@ jobs:
       deploy_recommended: ${{ steps.gates.outputs.deploy_recommended }}
       ref: ${{ steps.set_ref.outputs.ref }}
     steps:
-      - name: Decide which ref to track
+      # AI remediation pushes its commit back to the trigger ref, so
+      # this job checks out the same ref as the rebuild. For
+      # pull_request events the trigger ref is the PR head.
+      - name: Track the ref used by the rebuild
         id: set_ref
-        run: |
-          if [ -n "${{ needs.security-ai-remediate.outputs.remediation_branch }}" ]; then
-            echo "ref=${{ needs.security-ai-remediate.outputs.remediation_branch }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "ref=${{ github.event.pull_request.head.ref || github.ref }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -1213,7 +1219,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.check-deploy-gates.outputs.ref || '' }}
+          ref: ${{ needs.check-deploy-gates.outputs.ref }}
           fetch-depth: 0
 
       - name: Set up JDK 21 (Temurin)
