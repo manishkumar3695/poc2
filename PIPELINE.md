@@ -29,36 +29,43 @@ artifacts at every step.
 │ 3. Coverage  │  JaCoCo (-Pcoverage profile)
 └──────┬───────┘
        ▼
-┌────────────────────┐ ┌────────────────────┐
-│ 4. SonarCloud      │ │ 5. Trivy Scan      │
-│ -Dsonar.*          │ │ (fs/secret/dep/    │
-│  quality gate      │ │  vuln/misconfig)   │
-└─────────┬──────────┘ └──────────┬─────────┘
-          └────────┬──────────────┘
-                   ▼
+┌────────────┐ ┌────────────┐ ┌────────────┐
+│ 4. Sonar   │ │ 5. CodeQL  │ │ 6. Trivy   │
+│  Cloud     │ │ (static    │ │  Scan      │
+│ scan + QG  │ │  analysis) │ │            │
+└─────┬──────┘ └─────┬──────┘ └─────┬──────┘
+      └───────┬──────┴──────┬───────┘
+              ▼             ▼
        ┌─────────────────────┐
-       │ 6. AI Security      │
+       │ 7. AI Security      │
        │    Review (NVIDIA)  │
        └──────────┬──────────┘
                   ▼
        ┌─────────────────────┐
-       │ 7. AI Remediation   │
+       │ 8. AI Remediation   │
        │   (local commit +   │
        │    auto PR)         │
        └──────────┬──────────┘
                   ▼
        ┌─────────────────────┐
-       │ 8. Rebuild & Retest │
+       │ 9. Rebuild & Retest │
        └──────────┬──────────┘
                   ▼
-       ┌──────────────┐ ┌──────────────┐
-       │ 9. Sonar     │ │10. Trivy     │
-       │   Re-Scan    │ │   Re-Scan    │
-       └──────┬──────┘ └──────┬───────┘
-              └──────┬────────┘
-                     ▼
+┌──────────────┐ ┌──────────────┐
+│10. Sonar     │ │11. Trivy     │
+│   Re-Scan    │ │   Re-Scan    │
+└──────┬───────┘ └──────┬───────┘
+       └──────┬─────────┘
+              ▼
          ┌──────────────────────┐
-         │ 11. Deploy (dev/qa/  │
+         │  Pre-Deploy Gates    │
+         │  (security + coverage│
+         │   + Sonar QG + CodeQL│
+         │   + Trivy + AI rem.) │
+         └──────────┬───────────┘
+                    ▼
+         ┌──────────────────────┐
+         │ 12. Deploy (dev/qa/  │
          │     production)      │
          └──────────────────────┘
 ```
@@ -138,18 +145,44 @@ pause and the GitHub UI will surface an **approval** before continuing.
 
 ### 4. SonarCloud Scan
 
-- Runs `sonarsource/sonarqube-scan-action@v3`.
-- Waits for the Quality Gate (or skips if the action times out, controlled
-  by `continue-on-error: false` — Quality Gate failures still fail the job).
-- Uses the `coverage` artifact's `jacoco.xml` so Sonar can display coverage.
-- A follow-up step calls `scripts/generate-sonar-report.py`, which
-  additionally pulls `/api/issues/search` and writes a normalised
-  `sonar-report.json` (up to 5000 issues) plus a human-readable
-  `sonar-report.txt` summary.
+- Runs `sonarsource/sonarqube-scan-action@v3`. Static config (sources, tests,
+  coverage path, exclusions, Java version) lives in
+  `sonar-project.properties` at the repo root; the workflow only passes the
+  three secret-derived values.
+- A follow-up step calls `scripts/generate-sonar-report.py` to query the
+  SonarCloud Web API and write:
+  - `sonar-report.json` — flat-schema report matching the brief (project,
+    analysisDate, qualityGate, bugs, vulnerabilities, codeSmells,
+    securityHotspots, coverage, duplicatedLines, technicalDebt, ratings,
+    newIssues, overallIssueCounts), plus a backward-compat `raw` block.
+  - `SONAR_REPORT.md` — human-readable markdown with project name, branch,
+    commit SHA, analysis date, QG status, coverage, bugs, vulnerabilities,
+    code smells, security hotspots, ratings, technical debt, summary, and
+    deterministic recommendations.
+  - `sonar-report.txt` — plain-text summary consumed by the AI agent.
+- **Waits for the Quality Gate** with `sonarsource/sonarqube-quality-gate-action@v1`,
+  `failOnQualityGateError: true`, `inMillisecondsToWait: 300000`. A
+  `FAILED` or `ERROR` gate fails the job; the report-generation step runs
+  *before* the QG wait so the artifacts still upload via `if: always()`.
 - Skips gracefully when `SONAR_TOKEN` is missing (still uploads a stub
-  `sonar-report.json` so the downstream AI agent has something to ingest).
+  `sonar-report.json` and `SONAR_REPORT.md` so the downstream AI agent has
+  something to ingest).
+- See [`docs/SONARCLOUD_INTEGRATION.md`](docs/SONARCLOUD_INTEGRATION.md) for
+  the full breakdown of secrets, the Web API, the report schema, and the
+  Quality Gate flow.
 
-### 5. Trivy Scan
+### 5. CodeQL Static Analysis
+
+- Runs `github/codeql-action/init@v3` + `analyze@v3` with
+  `language: java` and `queries: security-extended,security-and-quality`.
+- The SARIF is uploaded to the GitHub Security tab automatically (category
+  `codeql`) and also mirrored to `reports/codeql-results.sarif` and uploaded
+  as the `codeql-results` artifact so the Pre-Deploy Gates job can parse it.
+- CodeQL counts as one of the four inputs to the Pre-Deploy Security Gate
+  (alongside SonarCloud, Trivy, and the AI agent). See section "Pre-Deploy
+  Security Gate" below.
+
+### 6. Trivy Scan
 
 - Runs `scripts/generate-trivy-report.sh`, which:
   1. Installs the `trivy` CLI (or uses the existing one).
@@ -163,7 +196,7 @@ pause and the GitHub UI will surface an **approval** before continuing.
   - misconfigurations (IaC)
   - license compliance (UNKNOWN severity)
 
-### 6. AI Security Review (NVIDIA)
+### 7. AI Security Review (NVIDIA)
 
 - Downloads the Sonar + Trivy + JaCoCo + JUnit artifacts.
 - Calls `scripts/ai-security-review.py`, which posts the artefacts to
@@ -183,7 +216,7 @@ pause and the GitHub UI will surface an **approval** before continuing.
   - `security-review.md` — human-readable report.
   - `security-summary.txt` — one-line-per-finding, easy to grep.
 
-### 7. AI Remediation (NVIDIA)
+### 8. AI Remediation (NVIDIA)
 
 - Reads the security review, Sonar report, and Trivy report.
 - `scripts/ai-remediation.py` applies **safe, deterministic** patches to
@@ -221,7 +254,7 @@ pause and the GitHub UI will surface an **approval** before continuing.
 - The remediation job exposes three outputs for downstream jobs:
   `remediation_branch`, `remediation_pr_url`, `has_fixes`.
 
-### 8. Rebuild & Retest
+### 9. Rebuild & Retest
 
 - Checks out the **remediation branch** (if the AI agent produced one)
   instead of the source branch.
@@ -229,7 +262,7 @@ pause and the GitHub UI will surface an **approval** before continuing.
 - **Hard-fails** on any compile error or test failure.
 - Re-uploads `jacoco.xml` and the coverage summary as `rebuild-output`.
 
-### 9. SonarCloud Re-Scan
+### 10. SonarCloud Re-Scan
 
 - Re-runs `sonarsource/sonarqube-scan-action@v3` against the remediated
   code.
@@ -238,7 +271,7 @@ pause and the GitHub UI will surface an **approval** before continuing.
   `sonar-diff-report.md`, which lists **Fixed**, **Remaining**, and
   **Newly introduced** issues.
 
-### 10. Trivy Re-Scan
+### 11. Trivy Re-Scan
 
 - Re-runs `scripts/generate-trivy-report.sh` against the remediated code.
 - Writes `trivy-report-after-fix.json` and `trivy-report-after-fix.txt`.
@@ -247,7 +280,7 @@ pause and the GitHub UI will surface an **approval** before continuing.
 - Uploads the new SARIF to the Security tab under the `trivy-fs-after-fix`
   category.
 
-### 11. Deploy
+### 12. Deploy
 
 - Runs only if `check-deploy-gates` outputs `deploy_recommended == true`.
 - The deploy job uses `environment: ${{ env.DEPLOY_ENV }}`, so GitHub
@@ -275,6 +308,8 @@ the re-scans. All of these must pass for `deploy_recommended` to be
 | `no_remaining_vulnerabilities` | SonarCloud reports `0` vulnerabilities after the re-scan. |
 | `no_critical_trivy` | Trivy has 0 CRITICAL findings (unless `ALLOW_CRITICAL=true`). |
 | `no_high_trivy` | Trivy has 0 HIGH findings (unless `ALLOW_HIGH=true`). |
+| `no_critical_codeql` | CodeQL has 0 CRITICAL findings (unless `ALLOW_CRITICAL=true`). |
+| `no_high_codeql` | CodeQL has 0 HIGH findings (unless `ALLOW_HIGH=true`). |
 | `ai_remediation_completed` | `remediation-report.json` exists and is non-empty. |
 
 The result is written to `reports/deploy-gates.json` and uploaded as the
@@ -290,9 +325,10 @@ is skipped.
 | `build-output` | `target/classes`, `target/*.jar`, `target/.build-ok` |
 | `junit-reports` | `target/surefire-reports/*.xml` |
 | `coverage-build-output` | `target/site/jacoco/jacoco.xml`, `target/site/jacoco/coverage-summary.csv`, `target/surefire-reports/` |
-| `sonar-report` | `reports/sonar-report.json`, `reports/sonar-report.txt`, `reports/sonar-quality-gate.txt` |
+| `sonar-report` | `reports/sonar-report.json`, `reports/SONAR_REPORT.md`, `reports/sonar-report.txt`, `reports/sonar-quality-gate.txt` |
+| `codeql-results` | `reports/codeql-results.sarif` |
 | `trivy-report` | `reports/trivy-report.json`, `reports/trivy-report.txt`, `reports/trivy-fs.sarif`, `reports/trivy-report.raw.json` |
-| `security-review` | `reports/security-review.json`, `reports/security-review.md`, `reports/security-summary.txt` |
+| `security-review` | `reports/security-review.json`, `reports/security-report.json`, `reports/security-review.md`, `reports/security-summary.txt` |
 | `remediation` | `reports/remediation-summary.md`, `reports/remediation-report.json`, `reports/changed-files.txt`, `reports/ai-patch.diff`, `reports/git-diff-stat.txt` |
 | `rebuild-output` | `target/` (post-remediation) |
 | `sonar-report-after-fix` | `reports/sonar-report-after-fix.json`, `reports/sonar-report-after-fix.txt`, `reports/sonar-diff-report.md` |

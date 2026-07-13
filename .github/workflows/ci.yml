@@ -278,15 +278,14 @@ jobs:
         uses: sonarsource/sonarqube-scan-action@v3
         with:
           projectBaseDir: .
+          # Static config (sources, tests, coverage path, exclusions, Java
+          # version) lives in sonar-project.properties at the repo root.
+          # The workflow only passes the three secret-derived values so the
+          # secret is never echoed into a properties file checked into git.
           args: >
             -Dsonar.projectKey=${SONAR_PROJECT_KEY}
             -Dsonar.organization=${SONAR_ORGANIZATION}
             -Dsonar.host.url=${SONAR_HOST_URL}
-            -Dsonar.sources=src/main/java
-            -Dsonar.tests=src/test/java
-            -Dsonar.java.binaries=target/classes
-            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
-            -Dsonar.junit.reportPaths=target/surefire-reports
 
       - name: SonarCloud scan (skipped — missing secrets)
         if: env.SONAR_TOKEN == '' || env.SONAR_PROJECT_KEY == '' || env.SONAR_ORGANIZATION == ''
@@ -295,7 +294,9 @@ jobs:
           echo "SKIPPED" > "$REPORT_DIR/sonar-quality-gate.txt"
           echo "::warning::SonarCloud scan skipped: SONAR_TOKEN, SONAR_PROJECT_KEY or SONAR_ORGANIZATION not set."
 
-      - name: Generate Sonar report (JSON + TXT)
+      # Generate the report BEFORE the QG wait so the artifacts still upload
+      # on QG failure (the upload step is `if: always()`).
+      - name: Generate Sonar report (JSON + Markdown)
         if: always()
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -306,7 +307,21 @@ jobs:
             --host "${SONAR_HOST_URL}" \
             --project-key "${SONAR_PROJECT_KEY}" \
             --token "${SONAR_TOKEN}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --commit "${GITHUB_SHA}" \
             --page-size 500
+
+      # Wait for the SonarCloud Quality Gate and fail the job when it
+      # returns ERROR or FAILED. Reads projectKey/host from the scanner's
+      # output (no extra config needed).
+      - name: SonarCloud Quality Gate
+        if: env.SONAR_TOKEN != '' && env.SONAR_PROJECT_KEY != '' && env.SONAR_ORGANIZATION != '' && steps.sonar.conclusion == 'success'
+        uses: sonarsource/sonarqube-quality-gate-action@v1
+        with:
+          failOnQualityGateError: true
+          inMillisecondsToWait: 300000
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: Upload SonarCloud reports
         if: always()
@@ -316,15 +331,76 @@ jobs:
           path: |
             reports/sonar-report.json
             reports/sonar-report.txt
+            reports/SONAR_REPORT.md
             reports/sonar-quality-gate.txt
           if-no-files-found: warn
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # 5. TRIVY SECURITY SCAN
+  # 5. CODEQL STATIC ANALYSIS
+  # ---------------------------------------------------------------
+  codeql:
+    name: "5. CodeQL Static Analysis"
+    runs-on: ubuntu-latest
+    needs: [coverage]
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # CodeQL needs a compilable class graph. -DskipTests keeps the build
+      # fast; tests are run in the `unit-test` job.
+      - name: Build (compile only, for CodeQL)
+        run: mvn -B -ntp -DskipTests -Dmaven.javadoc.skip=true package
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          queries: security-extended,security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql
+
+      - name: Copy CodeQL SARIF to reports/
+        if: always()
+        run: |
+          mkdir -p reports
+          # `codeql-action/analyze@v3` uploads to the Security tab by
+          # category=codeql; mirror the file to a known path so the
+          # deploy-gates job can download + parse it.
+          FIRST=$(find . -path ./.git -prune -o -name "codeql*.sarif" -print 2>/dev/null | head -n 1 || echo "")
+          if [ -n "$FIRST" ] && [ -f "$FIRST" ]; then
+            cp "$FIRST" reports/codeql-results.sarif
+          fi
+
+      - name: Upload CodeQL results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-results
+          path: reports/codeql-results.sarif
+          if-no-files-found: warn
+          retention-days: 90
+
+  # ---------------------------------------------------------------
+  # 6. TRIVY SECURITY SCAN
   # ---------------------------------------------------------------
   trivy-scan:
-    name: "5. Trivy Security Scan"
+    name: "6. Trivy Security Scan"
     runs-on: ubuntu-latest
     needs: [coverage]
     permissions:
@@ -388,12 +464,12 @@ jobs:
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # 6. AI SECURITY REVIEW (NVIDIA)
+  # 7. AI SECURITY REVIEW (NVIDIA)
   # ---------------------------------------------------------------
   security-ai-review:
-    name: "6. AI Security Review (NVIDIA)"
+    name: "7. AI Security Review (NVIDIA)"
     runs-on: ubuntu-latest
-    needs: [sonarcloud-scan, trivy-scan, coverage]
+    needs: [sonarcloud-scan, trivy-scan, coverage, codeql]
     permissions:
       contents: read
     steps:
@@ -460,6 +536,17 @@ jobs:
           set -e
           python3 scripts/ai-security-review.py --reports reports
 
+      # Publish the agent's output under the brief's filename
+      # (security-report.json) as well. ai-security-review.py writes
+      # security-review.json internally; this step is a low-cost alias so
+      # downstream consumers can use either name.
+      - name: Alias security-report.json
+        if: always()
+        run: |
+          if [ -f reports/security-review.json ]; then
+            cp reports/security-review.json reports/security-report.json
+          fi
+
       - name: Upload security review reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -467,16 +554,17 @@ jobs:
           name: security-review
           path: |
             reports/security-review.json
+            reports/security-report.json
             reports/security-review.md
             reports/security-summary.txt
           if-no-files-found: warn
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # 7. AI REMEDIATION (NVIDIA)
+  # 8. AI REMEDIATION (NVIDIA)
   # ---------------------------------------------------------------
   security-ai-remediate:
-    name: "7. AI Remediation Agent (NVIDIA)"
+    name: "8. AI Remediation Agent (NVIDIA)"
     runs-on: ubuntu-latest
     needs: [security-ai-review]
     if: ${{ always() && needs.security-ai-review.result == 'success' && !inputs.skip_remediation }}
@@ -596,10 +684,10 @@ jobs:
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # 8. REBUILD & RETEST
+  # 9. REBUILD & RETEST
   # ---------------------------------------------------------------
   rebuild-and-retest:
-    name: "8. Rebuild & Retest (post-remediation)"
+    name: "9. Rebuild & Retest (post-remediation)"
     runs-on: ubuntu-latest
     needs: [security-ai-remediate]
     if: ${{ always() && (needs.security-ai-remediate.result == 'success' || needs.security-ai-remediate.result == 'skipped') }}
@@ -683,7 +771,7 @@ jobs:
   # 9. SONARCLOUD RE-SCAN
   # ---------------------------------------------------------------
   sonarcloud-rescan:
-    name: "9. SonarCloud Re-Scan"
+    name: "10. SonarCloud Re-Scan"
     runs-on: ubuntu-latest
     needs: [rebuild-and-retest]
     permissions:
@@ -796,7 +884,7 @@ jobs:
   # 10. TRIVY RE-SCAN
   # ---------------------------------------------------------------
   trivy-rescan:
-    name: "10. Trivy Re-Scan"
+    name: "11. Trivy Re-Scan"
     runs-on: ubuntu-latest
     needs: [rebuild-and-retest]
     permissions:
@@ -894,7 +982,7 @@ jobs:
   check-deploy-gates:
     name: "Pre-Deploy Gates"
     runs-on: ubuntu-latest
-    needs: [rebuild-and-retest, sonarcloud-rescan, trivy-rescan, security-ai-remediate]
+    needs: [rebuild-and-retest, sonarcloud-rescan, trivy-rescan, security-ai-remediate, codeql]
     if: ${{ always() }}
     outputs:
       deploy_recommended: ${{ steps.gates.outputs.deploy_recommended }}
@@ -945,6 +1033,13 @@ jobs:
           path: reports/
 
         continue-on-error: true
+      - name: Download CodeQL SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: codeql-results
+          path: reports/
+
+        continue-on-error: true
       - name: Normalize coverage report path
         if: always()
         run: |
@@ -977,6 +1072,7 @@ jobs:
             --sonar-report        reports/sonar-report-after-fix.json \
             --trivy-report        reports/trivy-report-after-fix.json \
             --remediation-report  reports/remediation-report.json \
+            --codeql-sarif        reports/codeql-results.sarif \
             --rebuild-result      target/.rebuild-ok \
             --output              reports/deploy-gates.json
         continue-on-error: true
@@ -1005,7 +1101,7 @@ jobs:
   # 11. DEPLOY
   # ---------------------------------------------------------------
   deploy:
-    name: "11. Deploy"
+    name: "12. Deploy"
     runs-on: ubuntu-latest
     needs: [check-deploy-gates]
     if: ${{ needs.check-deploy-gates.outputs.deploy_recommended == 'True' }}

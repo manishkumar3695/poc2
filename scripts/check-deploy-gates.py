@@ -12,6 +12,7 @@ Required inputs (paths are configurable via flags):
   --remediation-report  Path to remediation-report.json
   --rebuild-result      Path to a file whose presence indicates a successful
                         rebuild (e.g. target/.rebuild-ok)
+  --codeql-sarif        Path to CodeQL SARIF (optional)
   --output              Where to write the gate result JSON
 
 Required env (or defaults):
@@ -60,6 +61,79 @@ def _parse_jacoco_coverage(path: Path) -> float | None:
     return None
 
 
+def _parse_codeql_sarif(path: Path) -> tuple[int, int]:
+    """Return (critical, high) alert counts parsed from a CodeQL SARIF file.
+
+    Each <result> element is classified by:
+      - properties["security-severity"] score (0.0 - 10.0), preferred
+      - falling back to the SARIF level attribute ("error"|"warning"|"note")
+    Score >= 9.0 -> Critical, 7.0-8.9 -> High, < 7.0 ignored.
+    Missing/invalid file -> (0, 0) (graceful degradation).
+
+    SARIF is JSON. CodeQL's emitter puts the score on the result's
+    `properties` property bag (e.g. result["properties"]["security-severity"]
+    = "9.5") and also on the tool rule definition as a fallback.
+    """
+    if not path.exists():
+        return 0, 0
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        sarif = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return 0, 0
+
+    critical = 0
+    high = 0
+
+    def _coerce_score(v) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # Index rules by ruleId so result.properties.security-severity can
+    # fall back to rule.properties.security-severity when the result omits it.
+    rule_severity: dict[str, float] = {}
+    for run in sarif.get("runs", []) or []:
+        tool = run.get("tool") or {}
+        # SARIF puts rules under tool.driver.rules (or tool.extensions[*].rules).
+        rules_containers = [tool.get("driver", {}).get("rules") or []]
+        for ext in tool.get("extensions") or []:
+            rules_containers.append(ext.get("rules") or [])
+        for ruleset in rules_containers:
+            for rule in ruleset or []:
+                rid = rule.get("id") or ""
+                if not rid:
+                    continue
+                props = rule.get("properties") or {}
+                score = _coerce_score(props.get("security-severity"))
+                if score is not None:
+                    rule_severity[rid] = score
+
+    for run in sarif.get("runs", []) or []:
+        for result in run.get("results", []) or []:
+            props = result.get("properties") or {}
+            score = _coerce_score(props.get("security-severity"))
+            if score is None:
+                rid = result.get("ruleId") or ""
+                score = rule_severity.get(rid)
+            if score is not None:
+                if score >= 9.0:
+                    critical += 1
+                elif score >= 7.0:
+                    high += 1
+                continue
+            # Last-resort: SARIF level attribute.
+            level = (result.get("level") or "").lower()
+            if level == "error":
+                critical += 1
+            elif level == "warning":
+                high += 1
+    return critical, high
+
+
 def _load_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -74,6 +148,7 @@ def main() -> int:
     p.add_argument("--trivy-report", type=Path, default=Path("reports/trivy-report-after-fix.json"))
     p.add_argument("--remediation-report", type=Path, default=Path("reports/remediation-report.json"))
     p.add_argument("--rebuild-result", type=Path, default=Path("target/.rebuild-ok"))
+    p.add_argument("--codeql-sarif", type=Path, default=Path("reports/codeql-results.sarif"))
     p.add_argument("--output", type=Path, default=Path("reports/deploy-gates.json"))
     args = p.parse_args()
 
@@ -152,7 +227,24 @@ def main() -> int:
         "passed": high_ok,
     })
 
-    # 6) AI remediation completed
+    # 6) CodeQL static analysis (Critical / High alert counts)
+    codeql_critical, codeql_high = _parse_codeql_sarif(args.codeql_sarif)
+    codeql_critical_ok = (codeql_critical == 0) or allow_critical
+    codeql_high_ok = (codeql_high == 0) or allow_high
+    gates.append({
+        "name": "no_critical_codeql",
+        "expected": "0 (allow_critical=%s)" % allow_critical,
+        "actual": codeql_critical,
+        "passed": codeql_critical_ok,
+    })
+    gates.append({
+        "name": "no_high_codeql",
+        "expected": "0 (allow_high=%s)" % allow_high,
+        "actual": codeql_high,
+        "passed": codeql_high_ok,
+    })
+
+    # 7) AI remediation completed
     remediation = _load_json(args.remediation_report)
     remediation_ok = bool(remediation.get("fixes")) or remediation.get("status") in {"OK", "SKIPPED"}
     gates.append({
