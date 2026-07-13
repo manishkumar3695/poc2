@@ -3214,7 +3214,7 @@
       ],
       "columnKind": "utf16CodeUnits",
       "properties": {
-        "imageID": "sha256:e76738d1c49c2954e80d27b8a552b491359d4cb4654a9e7210757c4f4d2b3002",
+        "imageID": "sha256:e0a7d38c06f9bb7c22e2f0ce33a20c9acfeb27c7449f3aaaff5f88b0ee2b4a13",
         "imageName": "vulnerable-spring-app:ci-013dc3aec40842c8d07fae4e5b7be164fc78d49e",
         "repoDigests": [],
         "repoTags": [

@@ -4,7 +4,7 @@
 **Project Key:** `nikita-jo_poc2`  
 **Branch:** `main`  
 **Commit SHA:** `013dc3aec40842c8d07fae4e5b7be164fc78d49e`  
-**Analysis Date:** 2026-07-13T14:28:22+0000  
+**Analysis Date:** 2026-07-13T16:19:09+0000  
 **Quality Gate Status:** ✅ **OK**  
 
 ## Quality Gate Status
@@ -48,4 +48,4 @@ This SonarCloud Cloud analysis scanned **vulnerable-spring-app** on branch `main
 - No outstanding recommendations. The codebase is within policy thresholds.
 
 ---
-_Report generated at 2026-07-13T14:29:07Z._  _See `sonar-report.json` for the full machine-readable payload._
+_Report generated at 2026-07-13T16:19:53Z._  _See `sonar-report.json` for the full machine-readable payload._

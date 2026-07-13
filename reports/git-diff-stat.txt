@@ -1,5 +1,5 @@
- reports/SONAR_REPORT.md      |   8 +-
- reports/sonar-report.json    |   6 +-
- reports/trivy-image.raw.json | 366 +++++++++++++++++++++----------------------
- reports/trivy-image.sarif    |   6 +-
- 4 files changed, 193 insertions(+), 193 deletions(-)
+ reports/SONAR_REPORT.md      |   4 +-
+ reports/sonar-report.json    |   4 +-
+ reports/trivy-image.raw.json | 358 +++++++++++++++++++++----------------------
+ reports/trivy-image.sarif    |   2 +-
+ 4 files changed, 184 insertions(+), 184 deletions(-)
