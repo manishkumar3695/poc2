@@ -40,6 +40,8 @@ import argparse
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -64,17 +66,80 @@ METRICS = (
 # ---------------------------------------------------------------------------
 # HTTP helper
 # ---------------------------------------------------------------------------
-def _http_get_json(url: str, token: str) -> dict | None:
-    """GET a SonarCloud API endpoint and return JSON, or None on failure."""
+# SonarCloud briefly returns 404 on /api/measures/component and /api/issues/search
+# while the server is still processing the analysis report that was just
+# uploaded. Retrying with exponential backoff rides out the processing window
+# without the caller needing to know about it. The QG step already waits for
+# analysis processing to complete, so retries here are a safety net for the
+# small lag between QG finishing and the Web API being readable. Tuned for
+# typical 1-3 retries over a few seconds; total worst-case wait per call is
+# 1 + 2 + 4 = 7s (1 + 2 + 4 = 7, capped at 5s per step) so the full six-endpoint
+# report can't hang the step for more than a minute.
+_DEFAULT_MAX_ATTEMPTS = 4
+_DEFAULT_INITIAL_BACKOFF_S = 1.0
+_DEFAULT_BACKOFF_CAP_S = 5.0
+
+
+def _http_get_json(
+    url: str,
+    token: str,
+    *,
+    max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    initial_backoff_s: float = _DEFAULT_INITIAL_BACKOFF_S,
+    backoff_cap_s: float = _DEFAULT_BACKOFF_CAP_S,
+    retry_on: tuple = (404, 400, 500, 502, 503, 504),
+) -> dict | None:
+    """GET a SonarCloud API endpoint and return JSON, or None on failure.
+
+    Retries with exponential backoff for any HTTP status in `retry_on`
+    (default: 404/400/5xx — the codes SonarCloud returns while still
+    processing an analysis report, or under transient load). Non-retried
+    failures (auth, 4xx other than 400/404) return None on the first try.
+    """
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Accept", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.load(resp)
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARN: GET {url} failed: {exc}", file=sys.stderr)
-        return None
+
+    backoff = initial_backoff_s
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code not in retry_on or attempt == max_attempts:
+                print(
+                    f"WARN: GET {url} failed: HTTP {exc.code} {exc.reason} "
+                    f"(attempt {attempt}/{max_attempts})",
+                    file=sys.stderr,
+                )
+                return None
+            print(
+                f"INFO: GET {url} -> HTTP {exc.code} (attempt {attempt}/"
+                f"{max_attempts}); retrying in {backoff:.1f}s",
+                file=sys.stderr,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Network / DNS / timeout — also worth retrying.
+            last_exc = exc
+            if attempt == max_attempts:
+                print(
+                    f"WARN: GET {url} failed: {exc} "
+                    f"(attempt {attempt}/{max_attempts})",
+                    file=sys.stderr,
+                )
+                return None
+            print(
+                f"INFO: GET {url} -> {exc} (attempt {attempt}/"
+                f"{max_attempts}); retrying in {backoff:.1f}s",
+                file=sys.stderr,
+            )
+        time.sleep(backoff)
+        backoff = min(backoff * 2.0, backoff_cap_s)
+    if last_exc is not None:
+        print(f"WARN: GET {url} gave up after {max_attempts} attempts: {last_exc}", file=sys.stderr)
+    return None
 
 
 # ---------------------------------------------------------------------------

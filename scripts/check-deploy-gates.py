@@ -192,7 +192,12 @@ def main() -> int:
     # 4) SonarCloud no new vulnerabilities introduced (re-scan should not have
     #    more vulnerabilities than the pre-fix scan; we don't have the pre-fix
     #    in the gate step, so we just check that the current scan has zero).
-    new_vulns = sonar.get("metrics", {}).get("vulnerabilities", "0")
+    # Read from the new flat schema first; fall back to the old nested
+    # `metrics.vulnerabilities` path so older reports keep working.
+    if "vulnerabilities" in sonar:
+        new_vulns = sonar.get("vulnerabilities", 0)
+    else:
+        new_vulns = sonar.get("metrics", {}).get("vulnerabilities", 0)
     try:
         new_vulns_n = int(new_vulns)
     except (TypeError, ValueError):

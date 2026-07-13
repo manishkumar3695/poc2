@@ -331,8 +331,24 @@ jobs:
           echo "::error::SonarCloud scan skipped: SONARQUBE_TOKEN, SONAR_PROJECT_KEY or SONAR_ORGANIZATION not set. Configure them in Settings → Secrets and variables → Actions."
           exit 1
 
-      # Generate the report BEFORE the QG wait so the artifacts still upload
-      # on QG failure (the upload step is `if: always()`).
+      # Wait for SonarCloud to finish processing the analysis AND for
+      # the Quality Gate to return a status. `mvn sonar:sonar` writes
+      # the scan metadata to `target/sonar/report-task.txt`; the action
+      # reads that file to find the ceTaskId, polls until processing
+      # finishes, and then evaluates the QG. The default 300s timeout
+      # is enough for our scans. By the time this step completes the
+      # Web API queries in the next step will return real data.
+      - name: SonarCloud Quality Gate
+        if: env.SONAR_TOKEN != '' && steps.sonar.conclusion == 'success'
+        uses: sonarsource/sonarqube-quality-gate-action@v1
+        with:
+          scanMetadataReportFile: target/sonar/report-task.txt
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+
+      # Generate the report AFTER the QG wait so SonarCloud has
+      # finished processing the analysis. Run with `if: always()` so
+      # the artifacts still upload on QG failure.
       - name: Generate Sonar report (JSON + Markdown)
         if: always()
         env:
@@ -348,18 +364,6 @@ jobs:
             --branch "${GITHUB_REF_NAME}" \
             --commit "${GITHUB_SHA}" \
             --page-size 500
-
-      # Wait for the SonarCloud Quality Gate and fail the job when it
-      # returns ERROR or FAILED. Reads projectKey/host from the scanner's
-      # output (no extra config needed).
-      - name: SonarCloud Quality Gate
-        if: env.SONAR_TOKEN != '' && steps.sonar.conclusion == 'success'
-        uses: sonarsource/sonarqube-quality-gate-action@v1
-        with:
-          failOnQualityGateError: true
-          inMillisecondsToWait: 300000
-        env:
-          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
 
       - name: Upload SonarCloud reports
         if: always()
