@@ -183,19 +183,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      - name: Run unit tests (instrumented)
-        # Plain `test` so the JaCoCo `prepare-agent` (bound to the test phase
-        # by the coverage profile) instruments the JVM and produces the
-        # jacoco.exec file.
-        run: mvn -B -ntp -Pcoverage test
-
-      - name: Generate JaCoCo coverage report
-        # The JaCoCo `report` goal is bound to the `verify` phase in pom.xml,
-        # so `mvn -Pcoverage report` is NOT a valid invocation — `report` is
-        # a plugin goal, not a lifecycle phase. Run `verify` (which executes
-        # the bound report goal) with the threshold forced to 0 so the bound
-        # `check` goal never fails the build. The real threshold is enforced
-        # by `check-deploy-gates` (uses MIN_COVERAGE).
+      - name: Run unit tests + JaCoCo coverage (single Maven invocation)
+        # The JaCoCo `prepare-agent`, `report`, and `check` goals are all
+        # bound inside the `coverage` profile (see pom.xml). They must all
+        # run in the SAME Maven invocation: `prepare-agent` sets the
+        # `-javaagent:...jacoco.agent.jar` argLine for surefire's forked
+        # JVM (which is what writes target/jacoco.exec), then `report` reads
+        # that file and writes target/site/jacoco/jacoco.xml. Splitting them
+        # into two `mvn` calls (e.g. `mvn test` then `mvn verify`) drops the
+        # agent because argLine is JVM-local — the second run sees no agent
+        # and `report` short-circuits with "Skipping JaCoCo execution due
+        # to missing execution data file."
+        #
+        # `-Djacoco.min.coverage=0` disables the bound `check` goal's
+        # threshold so it never fails this job. The real threshold is
+        # enforced later by `check-deploy-gates` (uses MIN_COVERAGE).
         run: mvn -B -ntp -Pcoverage verify -Djacoco.min.coverage=0
 
       - name: Generate coverage summary (CSV + JSON + Markdown)
@@ -205,17 +207,17 @@ jobs:
         run: |
           set -euo pipefail
           # Always emit all three formats so the artifact upload has files even
-          # when coverage is below threshold or no jacoco.xml was produced
-          # (e.g. no tests exist yet). The script writes a "no data" payload in
-          # that case rather than failing.
+          # when coverage is below threshold. If jacoco.xml is genuinely
+          # missing (e.g. no tests at all), the script writes a "no data"
+          # payload and a `::warning::` rather than failing — the
+          # coverage_threshold gate in `check-deploy-gates` is what decides
+          # whether to block the deploy.
           mkdir -p reports
           python3 scripts/generate-coverage-report.py \
             --xml target/site/jacoco/jacoco.xml \
             --output-dir reports \
             --min-coverage ${MIN_COVERAGE}
-          # Also keep a copy next to the raw jacoco.xml for the upload step,
-          # but only when the JaCoCo output dir actually exists (it may not
-          # if `mvn -Pcoverage verify` short-circuited).
+          # Also keep a copy next to the raw jacoco.xml for the upload step.
           if [ -d target/site/jacoco ]; then
             cp reports/coverage-summary.csv target/site/jacoco/coverage-summary.csv
           fi
@@ -781,13 +783,13 @@ jobs:
 
       - name: Build (compile)
         run: mvn -B -ntp -DskipTests -Dmaven.javadoc.skip=true package
-      - name: Run unit tests (instrumented)
-        run: mvn -B -ntp -Pcoverage test
-      - name: Generate JaCoCo coverage report
-        # Same rationale as the `coverage` job: invoke the `verify` phase so
-        # the bound `report` goal writes jacoco.xml, with the threshold forced
-        # to 0 so the bound `check` goal never fails the build. The real
-        # threshold is enforced by `check-deploy-gates`.
+      - name: Run unit tests + JaCoCo coverage (single Maven invocation)
+        # Same rationale as the `coverage` job: keep the bound JaCoCo
+        # `prepare-agent`, `report`, and `check` goals in a single `mvn`
+        # call so surefire's JVM is instrumented and the resulting
+        # jacoco.exec is read by `report` in the same run. Splitting them
+        # across two `mvn` invocations drops the agent and `report` skips
+        # with "missing execution data file."
         run: mvn -B -ntp -Pcoverage verify -Djacoco.min.coverage=0
       - name: Mark rebuild success
         run: mkdir -p target && touch target/.rebuild-ok
