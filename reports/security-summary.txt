@@ -1,0 +1,15 @@
+status=STUB
+risk_score=870
+priority=P0
+finding_count=10
+
+[CRITICAL] SR-001 CVE-2026-41293  -- org.apache.tomcat.embed:tomcat-embed-core:1
+[CRITICAL] SR-002 CVE-2026-43512  -- org.apache.tomcat.embed:tomcat-embed-core:1
+[CRITICAL] SR-003 CVE-2026-43515  -- org.apache.tomcat.embed:tomcat-embed-core:1
+[CRITICAL] SR-004 CVE-2025-66614  -- org.apache.tomcat.embed:tomcat-embed-core:1
+[CRITICAL] SR-005 CVE-2025-55754  -- org.apache.tomcat.embed:tomcat-embed-core:1
+[CRITICAL] SR-006 CVE-2026-22732  -- org.springframework.security:spring-security-web:1
+[HIGH    ] SR-007 CVE-2026-54512  -- com.fasterxml.jackson.core:jackson-databind:1
+[HIGH    ] SR-008 CVE-2026-54513  -- com.fasterxml.jackson.core:jackson-databind:1
+[HIGH    ] SR-009 CVE-2025-48989  -- org.apache.tomcat.embed:tomcat-embed-core:1
+[HIGH    ] SR-010 CVE-2025-52520  -- org.apache.tomcat.embed:tomcat-embed-core:1
