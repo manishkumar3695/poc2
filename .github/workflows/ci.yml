@@ -990,7 +990,7 @@ jobs:
             --output-dir reports \
             --host "${SONAR_HOST_URL}" \
             --project-key "${SONAR_PROJECT_KEY}" \
-            --token "${SONARQUBE_TOKEN}" \
+            --token "${SONAR_TOKEN}" \
             --page-size 500
           # Rename for clarity
           if [ -f reports/sonar-report.json ]; then
