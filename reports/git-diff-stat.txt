@@ -1,2 +1,7 @@
- Dockerfile | 1 +
- 1 file changed, 1 insertion(+)
+ Dockerfile                   |   1 +
+ reports/SONAR_REPORT.md      |   8 +-
+ reports/llm-prompt.txt       |   9 ++
+ reports/sonar-report.json    |   6 +-
+ reports/trivy-image.raw.json | 342 +++++++++++++++++++++----------------------
+ reports/trivy-image.sarif    |   6 +-
+ 6 files changed, 191 insertions(+), 181 deletions(-)

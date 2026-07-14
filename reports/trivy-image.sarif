@@ -2332,11 +2332,11 @@
       ],
       "columnKind": "utf16CodeUnits",
       "properties": {
-        "imageID": "sha256:9fed78e89da80fec97eccfa0e97f983bb5141a5d425d30af1218c133739c888e",
-        "imageName": "vulnerable-spring-app:ci-354a0c8926020f44a33e1b87634dc83e5d0740f3",
+        "imageID": "sha256:d356be0781158a4b374b295d117488d462fda08a0361527fd8603b801cbaecf5",
+        "imageName": "vulnerable-spring-app:ci-0ded7fb9eae4fbfad558c75cbdbf724888aa6152",
         "repoDigests": [],
         "repoTags": [
-          "vulnerable-spring-app:ci-354a0c8926020f44a33e1b87634dc83e5d0740f3"
+          "vulnerable-spring-app:ci-0ded7fb9eae4fbfad558c75cbdbf724888aa6152"
         ]
       }
     }

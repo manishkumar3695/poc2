@@ -38,6 +38,7 @@ WORKDIR /app
 RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && apt-get upgrade -y --no-install-recommends \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends tini \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 1001 app \

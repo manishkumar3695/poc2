@@ -3,8 +3,8 @@
 **Project:** vulnerable-spring-app  
 **Project Key:** `nikita-jo_poc2`  
 **Branch:** `main`  
-**Commit SHA:** `354a0c8926020f44a33e1b87634dc83e5d0740f3`  
-**Analysis Date:** 2026-07-14T06:20:50+0000  
+**Commit SHA:** `0ded7fb9eae4fbfad558c75cbdbf724888aa6152`  
+**Analysis Date:** 2026-07-14T06:50:34+0000  
 **Quality Gate Status:** ✅ **OK**  
 
 ## Quality Gate Status
@@ -41,11 +41,11 @@ The SonarCloud quality gate is **OK**.
 
 ## Summary
 
-This SonarCloud Cloud analysis scanned **vulnerable-spring-app** on branch `main` at commit `354a0c8926020f44a33e1b87634dc83e5d0740f3`. The quality gate is **OK**, line coverage is **N/A**, with **0** vulnerabilities, **0** bugs, **0** code smells, and **0** security hotspots.
+This SonarCloud Cloud analysis scanned **vulnerable-spring-app** on branch `main` at commit `0ded7fb9eae4fbfad558c75cbdbf724888aa6152`. The quality gate is **OK**, line coverage is **N/A**, with **0** vulnerabilities, **0** bugs, **0** code smells, and **0** security hotspots.
 
 ## Recommendations
 
 - No outstanding recommendations. The codebase is within policy thresholds.
 
 ---
-_Report generated at 2026-07-14T06:21:36Z._  _See `sonar-report.json` for the full machine-readable payload._
+_Report generated at 2026-07-14T06:51:20Z._  _See `sonar-report.json` for the full machine-readable payload._
