@@ -1,5 +1,0 @@
-reports-test/ai-patch.diff
-reports-test/changed-files.txt
-reports-test/git-diff-stat.txt
-reports-test/remediation-summary.md
-scripts/ai-remediation.py
