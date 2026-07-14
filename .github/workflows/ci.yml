@@ -848,17 +848,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      - name: Fetch remediation report from main branch
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          git fetch --no-tags --depth=1 origin main
+          if git show origin/main:reports/remediation-report.json > reports/remediation-report.json 2>/dev/null; then
+            echo "Using remediation report from main branch"
+          else
+            echo "::warning::No remediation report found on main branch"
+          fi
+
       - name: Download remediation artifact
+        if: ${{ hashFiles('reports/remediation-report.json') == '' }}
         uses: actions/download-artifact@v4
         with:
           name: remediation
           path: reports/
+        continue-on-error: true
 
       - name: Generate security testcase JSON
         env:
@@ -974,10 +989,10 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------
-  # 9. REBUILD & RETEST
+  # 11. REBUILD & RETEST
   # ---------------------------------------------------------------
   rebuild-and-retest:
-    name: "9. Rebuild & Retest (post-remediation)"
+    name: "11. Rebuild & Retest (post-remediation)"
     runs-on: ubuntu-latest
     needs: [security-ai-remediate]
     if: ${{ always() && (needs.security-ai-remediate.result == 'success' || needs.security-ai-remediate.result == 'skipped') }}
@@ -1056,10 +1071,10 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------
-  # 9. SONARCLOUD RE-SCAN
+  # 12. SONARCLOUD RE-SCAN
   # ---------------------------------------------------------------
   sonarcloud-rescan:
-    name: "10. SonarCloud Re-Scan"
+    name: "12. SonarCloud Re-Scan"
     runs-on: ubuntu-latest
     needs: [rebuild-and-retest]
     permissions:
@@ -1185,10 +1200,10 @@ jobs:
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # 10. TRIVY RE-SCAN
+  # 13. TRIVY RE-SCAN
   # ---------------------------------------------------------------
   trivy-rescan:
-    name: "11. Trivy Re-Scan"
+    name: "13. Trivy Re-Scan"
     runs-on: ubuntu-latest
     needs: [rebuild-and-retest]
     permissions:
@@ -1288,10 +1303,10 @@ jobs:
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # GATEKEEPER — runs before deploy
+  # 14. GATEKEEPER — runs before deploy
   # ---------------------------------------------------------------
   check-deploy-gates:
-    name: "Pre-Deploy Gates"
+    name: "14. Pre-Deploy Gates"
     runs-on: ubuntu-latest
     needs: [rebuild-and-retest, sonarcloud-rescan, trivy-rescan, security-ai-remediate, codeql]
     if: ${{ always() }}
@@ -1407,10 +1422,10 @@ jobs:
           retention-days: 90
 
   # ---------------------------------------------------------------
-  # 11. DEPLOY
+  # 15. DEPLOY
   # ---------------------------------------------------------------
   deploy:
-    name: "12. Deploy"
+    name: "15. Deploy"
     runs-on: ubuntu-latest
     needs: [check-deploy-gates]
     if: ${{ needs.check-deploy-gates.outputs.deploy_recommended == 'True' }}
