@@ -68,8 +68,17 @@ POM_PATH = "pom.xml"
 
 
 def _run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    """Run a command and return the CompletedProcess. On error, print stderr."""
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    """Run a command and return the CompletedProcess. On error, print stderr.
+
+    Uses UTF-8 with `errors="replace"` so that git output containing
+    non-ASCII bytes (file paths, diff hunks with non-ASCII source)
+    does not crash the parent on Windows, where the system default
+    codec is cp1252. The crash was reproducible on `git diff` when
+    the diff contained even a single non-cp1252 byte."""
+    proc = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", check=False,
+    )
     if check and proc.returncode != 0:
         print(f"::warning::Command failed: {' '.join(cmd)}", file=sys.stderr)
         print(proc.stdout, file=sys.stderr)
@@ -140,6 +149,69 @@ def _pick_safe_bump(current: str, candidates: str) -> str | None:
             continue
         if cand[0] == cur_major:
             return raw
+    return None
+
+
+def _is_upgrade(current: str, candidate: str) -> bool:
+    """True iff `candidate` is strictly newer than `current` on the
+    same major. Used to prevent the bumper from picking a same-major
+    DOWNGRADE (e.g. parent 3.3.13 -> 3.1.4). Returns False for
+    invalid inputs.
+    """
+    cur = _parse_semver(current)
+    cand = _parse_semver(candidate)
+    if not cur or not cand:
+        return False
+    if cand[0] != cur[0]:
+        return False
+    if cand[1] > cur[1]:
+        return True
+    if cand[1] == cur[1] and cand[2] >= cur[2]:
+        return True
+    return False
+
+
+def _pick_parent_target(current_parent_version: str, actionable: list[dict]) -> str | None:
+    """Pick a safe target version for `spring-boot-starter-parent`.
+
+    Looks at the *parent*'s own `fixedVersion` first (`org.springframework
+    .boot:spring-boot`), then at any `org.springframework.boot:*` starter's
+    `fixedVersion` (they all share the SB major-minor scheme), and only
+    falls back to a transitive finding's `fixedVersion` as a last resort.
+    This avoids the bug where the trigger finding was a transitive library
+    (e.g. jackson-databind 2.x) and the fixer wrote `2.18.8` into the
+    parent slot — a major-version downgrade.
+    """
+    # All SB artifacts that share the parent's version scheme.
+    parent_pkgs = {
+        "org.springframework.boot:spring-boot",
+        "org.springframework.boot:spring-boot-starter-web",
+        "org.springframework.boot:spring-boot-starter-data-jpa",
+        "org.springframework.boot:spring-boot-starter-security",
+        "org.springframework.boot:spring-boot-starter-tomcat",
+        "org.springframework.boot:spring-boot-starter-logging",
+    }
+    # Priority 1: the parent artifact's own fixedVersion.
+    for a in actionable:
+        if a["pkg"] == "org.springframework.boot:spring-boot":
+            target = _pick_safe_bump(current_parent_version, a["fixed"])
+            if target and _is_upgrade(current_parent_version, target):
+                return target
+    # Priority 2: any SB starter artifact (they share the version scheme).
+    for a in actionable:
+        if a["pkg"] in parent_pkgs:
+            target = _pick_safe_bump(current_parent_version, a["fixed"])
+            if target and _is_upgrade(current_parent_version, target):
+                return target
+    # Priority 3: any other SB-managed artifact — the version scheme
+    # may not match the parent's, so we already filtered by
+    # _is_upgrade in `_pick_safe_bump` and the function returns None
+    # for version-scheme mismatches, so this is a safety net only.
+    for a in actionable:
+        if a["pkg"].startswith("org.springframework.boot:"):
+            target = _pick_safe_bump(current_parent_version, a["fixed"])
+            if target and _is_upgrade(current_parent_version, target):
+                return target
     return None
 
 
@@ -398,6 +470,12 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
         "org.apache.tomcat.embed:tomcat-embed-websocket",
         "org.hibernate.orm:hibernate-core",
     }
+    # The "trigger" finding is the first SB-managed artifact that has a
+    # CRITICAL/HIGH advisory. We only need its existence to decide
+    # "yes, we should consider a parent bump" — the *target version*
+    # always comes from the `org.springframework.boot:spring-boot`
+    # finding (or any spring-boot-* starter), because that's the
+    # artifact that lives in the same version scheme as the parent.
     sb_finding = next(
         (a for a in actionable if a["pkg"] in sb_managed_artifacts),
         None,
@@ -411,14 +489,17 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
         m = parent_pat.search(new)
         if m:
             old_version = m.group(2).strip()
-            # Trivy may list several fixed versions ("4.0.6, 3.5.14");
-            # try every candidate and pick the first one on the same
-            # major. Picking only the first entry used to reject
-            # legitimate same-major minor bumps like 3.3.13 -> 3.5.14.
-            new_version = _pick_safe_bump(old_version, sb_finding["fixed"])
-            if new_version and old_version != new_version:
+            # Pick the parent-bump target by looking at the SB parent
+            # CVE's `fixedVersion` first, then at any SB starter's
+            # `fixedVersion`, then at the trigger finding. Using the
+            # trigger finding directly is WRONG — its version scheme
+            # is the artifact's (e.g. jackson-databind 2.x), not the
+            # parent's (3.x), which used to produce nonsensical
+            # "bump parent to 3.1.4" suggestions.
+            parent_target = _pick_parent_target(old_version, actionable)
+            if parent_target and old_version != parent_target:
                 new = parent_pat.sub(
-                    lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}",
+                    lambda mm: f"{mm.group(1)}{parent_target}{mm.group(3)}",
                     new,
                     count=1,
                 )
@@ -428,11 +509,11 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
                     "file": POM_PATH,
                     "description": (
                         f"Bumped spring-boot-starter-parent from {old_version} to "
-                        f"{new_version} (transitive fix for {sb_finding['pkg']})"
+                        f"{parent_target} (transitive fix for {sb_finding['pkg']})"
                     ),
                     "safe": True,
                     "old_version": old_version,
-                    "new_version": new_version,
+                    "new_version": parent_target,
                 })
                 # Once we bump the parent, all the BOM-managed findings
                 # are addressed — skip the direct-dependency pass.
@@ -461,8 +542,12 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
         old_version = m.group(2).strip()
         # Same multi-candidate handling as the parent-bump branch: pick
         # the first same-major entry from Trivy's fixed-version list.
+        # We additionally require the target to be an UPGRADE (not a
+        # same-major downgrade like 6.1.21 -> 6.0.0).
         new_version = _pick_safe_bump(old_version, a["fixed"])
         if not new_version or new_version == old_version:
+            continue
+        if not _is_upgrade(old_version, new_version):
             continue
         new = pat.sub(lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}", new, count=1)
         fixes.append({

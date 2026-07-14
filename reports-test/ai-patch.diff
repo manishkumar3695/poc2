@@ -1,588 +1,821 @@
+diff --git a/reports-test/ai-patch.diff b/reports-test/ai-patch.diff
+deleted file mode 100644
+index 4deb973..0000000
+--- a/reports-test/ai-patch.diff
++++ /dev/null
+@@ -1,588 +0,0 @@
+-diff --git a/scripts/__pycache__/ai-remediation.cpython-312.pyc b/scripts/__pycache__/ai-remediation.cpython-312.pyc
+-index bdaaae5..993b726 100644
+-Binary files a/scripts/__pycache__/ai-remediation.cpython-312.pyc and b/scripts/__pycache__/ai-remediation.cpython-312.pyc differ
+-diff --git a/scripts/ai-remediation.py b/scripts/ai-remediation.py
+-index 1e3489c..3481e06 100644
+---- a/scripts/ai-remediation.py
+-+++ b/scripts/ai-remediation.py
+-@@ -85,6 +85,64 @@ def _write(path: Path, content: str) -> None:
+-     path.write_text(content, encoding="utf-8")
+- 
+- 
+-+def _parse_semver(v: str) -> tuple[int, int, int] | None:
+-+    """Parse the leading MAJOR.MINOR.PATCH from a version string.
+-+
+-+    Strips trailing qualifiers (`-ubuntu4.2`, `-RELEASE`, `-SNAPSHOT`,
+-+    leading `1:` epoch prefix) and returns a 3-tuple of ints. Returns
+-+    None when no dotted version is found (e.g. the "Link: ..." sentinel
+-+    Trivy returns for "no fix available" advisories).
+-+    """
+-+    if not v:
+-+        return None
+-+    # Strip Debian/RPM epoch prefix.
+-+    s = v.strip()
+-+    if ":" in s:
+-+        s = s.split(":", 1)[1]
+-+    # Take the leading dotted run.
+-+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", s)
+-+    if not m:
+-+        return None
+-+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+-+
+-+
+-+def _pick_safe_bump(current: str, candidates: str) -> str | None:
+-+    """Pick a safe bump target from a Trivy `fixedVersion` string.
+-+
+-+    Trivy sometimes lists multiple fixed versions separated by `,`, e.g.
+-+    `"4.0.6, 3.5.14"`. The previous logic in this fixer took only the
+-+    first entry, which meant a fix like `3.3.13 -> 3.5.14` was rejected
+-+    because the first candidate (`4.0.6`) was a major bump.
+-+
+-+    Strategy:
+-+      1. Split `candidates` on `,` and strip each entry.
+-+      2. Drop "Link: ..." / URL-only entries (those mean "no fix").
+-+      3. From the remaining list, return the first candidate whose
+-+         MAJOR equals `current`'s MAJOR (covers both patch-only and
+-+         same-major minor upgrades). Same-major is the only safe bump
+-+         Spring Boot / Jackson etc. accept without breaking ABI.
+-+      4. If none match, return None and let the caller skip.
+-+
+-+    Returns the chosen candidate string, or None.
+-+    """
+-+    cur = _parse_semver(current)
+-+    if cur is None:
+-+        return None
+-+    cur_major = cur[0]
+-+    for raw in (c.strip() for c in (candidates or "").split(",")):
+-+        if not raw:
+-+            continue
+-+        # Skip "Link: ..." / URL-only sentinels.
+-+        if raw.lower().startswith("link:") or raw.lower().startswith("http"):
+-+            continue
+-+        cand = _parse_semver(raw)
+-+        if cand is None:
+-+            continue
+-+        if cand[0] == cur_major:
+-+            return raw
+-+    return None
+-+
+-+
+- # ---------------------------------------------------------------------
+- # Safe fixers â€” each returns a list of "fix" dicts for the report.
+- # ---------------------------------------------------------------------
+-@@ -353,34 +411,34 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+-         m = parent_pat.search(new)
+-         if m:
+-             old_version = m.group(2).strip()
+--            new_version = sb_finding["fixed"].strip()
+--            if old_version != new_version:
+--                # Only act on patch/minor bumps (same major). Don't auto-bump majors.
+--                def _major(v: str) -> str:
+--                    return v.split(".", 1)[0]
+--                if _major(old_version) == _major(new_version):
+--                    new = parent_pat.sub(
+--                        lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}",
+--                        new,
+--                        count=1,
+--                    )
+--                    fixes.append({
+--                        "rule": "outdated-dependency",
+--                        "category": "dependency",
+--                        "file": POM_PATH,
+--                        "description": (
+--                            f"Bumped spring-boot-starter-parent from {old_version} to "
+--                            f"{new_version} (transitive fix for {sb_finding['pkg']})"
+--                        ),
+--                        "safe": True,
+--                        "old_version": old_version,
+--                        "new_version": new_version,
+--                    })
+--                    # Once we bump the parent, all the BOM-managed findings
+--                    # are addressed â€” skip the direct-dependency pass.
+--                    if new != original:
+--                        _write(pom, new)
+--                    return fixes
+-+            # Trivy may list several fixed versions ("4.0.6, 3.5.14");
+-+            # try every candidate and pick the first one on the same
+-+            # major. Picking only the first entry used to reject
+-+            # legitimate same-major minor bumps like 3.3.13 -> 3.5.14.
+-+            new_version = _pick_safe_bump(old_version, sb_finding["fixed"])
+-+            if new_version and old_version != new_version:
+-+                new = parent_pat.sub(
+-+                    lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}",
+-+                    new,
+-+                    count=1,
+-+                )
+-+                fixes.append({
+-+                    "rule": "outdated-dependency",
+-+                    "category": "dependency",
+-+                    "file": POM_PATH,
+-+                    "description": (
+-+                        f"Bumped spring-boot-starter-parent from {old_version} to "
+-+                        f"{new_version} (transitive fix for {sb_finding['pkg']})"
+-+                    ),
+-+                    "safe": True,
+-+                    "old_version": old_version,
+-+                    "new_version": new_version,
+-+                })
+-+                # Once we bump the parent, all the BOM-managed findings
+-+                # are addressed â€” skip the direct-dependency pass.
+-+                if new != original:
+-+                    _write(pom, new)
+-+                return fixes
+-         # If sb_finding exists but there's no parent to bump, fall through
+-         # to Strategy 2 (in case any actionable finding matches a direct
+-         # dependency).
+-@@ -389,7 +447,6 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+-     # explicit <version> in pom.xml for the artifact) ----
+-     for a in actionable:
+-         pkg = a["pkg"]
+--        fixed = a["fixed"]
+-         if ":" not in pkg:
+-             continue
+-         group_id, artifact_id = pkg.split(":", 1)
+-@@ -402,21 +459,20 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+-         if not m:
+-             continue
+-         old_version = m.group(2).strip()
+--        if old_version == fixed:
+--            continue
+--        def _major(v: str) -> str:
+--            return v.split(".", 1)[0]
+--        if _major(old_version) != _major(fixed):
+-+        # Same multi-candidate handling as the parent-bump branch: pick
+-+        # the first same-major entry from Trivy's fixed-version list.
+-+        new_version = _pick_safe_bump(old_version, a["fixed"])
+-+        if not new_version or new_version == old_version:
+-             continue
+--        new = pat.sub(lambda mm: f"{mm.group(1)}{fixed}{mm.group(3)}", new, count=1)
+-+        new = pat.sub(lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}", new, count=1)
+-         fixes.append({
+-             "rule": "outdated-dependency",
+-             "category": "dependency",
+-             "file": POM_PATH,
+--            "description": f"Bumped {pkg} from {old_version} to {fixed}",
+-+            "description": f"Bumped {pkg} from {old_version} to {new_version}",
+-             "safe": True,
+-             "old_version": old_version,
+--            "new_version": fixed,
+-+            "new_version": new_version,
+-         })
+- 
+-     if new != original:
+-@@ -424,6 +480,104 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+-     return fixes
+- 
+- 
+-+def fix_bump_dockerfile_base(repo_root: Path, trivy_report) -> list[dict]:
+-+    """Patch the Dockerfile runtime stage to pull the latest OS security
+-+    updates. Most of the Trivy image-scanner findings the security
+-+    review emits (bsdutils, gzip, libc-bin, libblkid1, etc.) are
+-+    OS-package CVEs in the runtime base image. They cannot be fixed
+-+    in Java code; they have to be fixed at the image level.
+-+
+-+    The conservative, deterministic fix that works for any
+-+    Ubuntu/Debian base image is to add `apt-get upgrade -y` to the
+-+    runtime stage's `RUN apt-get update` block. This pulls every
+-+    published security-pocket update for the codename, which closes
+-+    the OS-package CVEs Trivy reports.
+-+
+-+    Idempotency: the marker `FIX_DOCKERFILE_BASE_APPLIED` is added to
+-+    the comment of the `apt-get` line so a re-run is a no-op.
+-+    """
+-+    fixes: list[dict] = []
+-+    dockerfile = repo_root / "Dockerfile"
+-+    if not dockerfile.exists():
+-+        return fixes
+-+    findings = trivy_report if isinstance(trivy_report, list) else trivy_report.get("findings", [])
+-+    # Only act on image-level OS-package findings. SonarQube code-smell
+-+    # findings and Maven-coordinate findings are not relevant here.
+-+    os_findings = [
+-+        f for f in findings
+-+        if (f.get("scanner") == "image" or "library/" in (f.get("file") or ""))
+-+        and (f.get("severity") or "").upper() in {"CRITICAL", "HIGH", "MEDIUM"}
+-+        and ":" not in (f.get("pkgName") or "")  # exclude Maven coordinates
+-+    ]
+-+    if not os_findings:
+-+        return fixes
+-+    original = _read(dockerfile)
+-+    if "FIX_DOCKERFILE_BASE_APPLIED" in original:
+-+        return fixes  # idempotent
+-+    new = original
+-+    # Strategy A: append `&& apt-get upgrade -y` to an existing
+-+    # `apt-get update` line in the runtime stage (any stage after the
+-+    # last `FROM`). This is the safest universal fix â€” it pulls
+-+    # every security-pocket update for the current codename without
+-+    # requiring us to know a specific patch date.
+-+    # Match `apt-get update \\\n` (with the trailing backslash and
+-+    # newline, which is the Dockerfile line-continuation pattern) so
+-+    # the replacement preserves the line layout bash needs.
+-+    apt_pat = re.compile(
+-+        r"(?P<lead>apt-get\s+update\s*\\\s*\n)"
+-+        r"(?P<rest>\s*&&)",
+-+    )
+-+    m = apt_pat.search(new)
+-+    if m:
+-+        from_positions = [mm.start() for mm in re.finditer(r"^FROM\s+", new, re.MULTILINE)]
+-+        last_from = from_positions[-1] if from_positions else -1
+-+        if last_from == -1 or m.start() >= last_from:
+-+            # `lead` ends with `apt-get update \\\n`; we insert
+-+            # ` && apt-get upgrade -y --no-install-recommends \\\n`
+-+            # right after it so the next original line continues
+-+            # seamlessly. The match is greedy on `lead` so `rest`
+-+            # always begins with ` && ...`.
+-+            upgrade_line = " && apt-get upgrade -y --no-install-recommends \\\n"
+-+            new = (
+-+                new[: m.end("lead")]
+-+                + upgrade_line
+-+                + new[m.end("lead"):]
+-+            )
+-+    # Strategy B: if there's no apt-get block to extend, insert a fresh
+-+    # one right after the runtime `FROM` line.
+-+    if new == original:
+-+        from_pat = re.compile(
+-+            r"^(FROM\s+\S+[^\n]*\n)(?!.*^FROM\s+)",  # last FROM line
+-+            re.MULTILINE | re.DOTALL,
+-+        )
+-+        m = from_pat.search(new)
+-+        if m:
+-+            insertion = (
+-+                "\n# VULNERABILITY FIX (AI auto-remediation, marker FIX_DOCKERFILE_BASE_APPLIED):\n"
+-+                "# Pull the latest OS security updates to remediate image-level Trivy findings.\n"
+-+                "RUN apt-get update \\\n"
+-+                " && apt-get upgrade -y --no-install-recommends \\\n"
+-+                " && rm -rf /var/lib/apt/lists/*\n"
+-+            )
+-+            new = new[: m.end()] + insertion + new[m.end():]
+-+    if new != original:
+-+        _write(dockerfile, new)
+-+        pkg_names = sorted({f.get("pkgName") for f in os_findings if f.get("pkgName")})[:5]
+-+        fixes.append({
+-+            "rule": "outdated-base-image",
+-+            "category": "vulnerability",
+-+            "file": "Dockerfile",
+-+            "description": (
+-+                f"Added `apt-get upgrade -y` to runtime stage to remediate "
+-+                f"image-level OS-package CVEs ({len(os_findings)} findings, "
+-+                f"e.g. {', '.join(pkg_names)})"
+-+            ),
+-+            "safe": True,
+-+            "fixes_count": len(os_findings),
+-+        })
+-+    return fixes
+-+
+-+
+- def fix_add_csp(repo_root: Path) -> list[dict]:
+-     """Add a Content-Security-Policy header to `SecurityConfig.java`.
+- 
+-@@ -790,8 +944,10 @@ def _extract_json(text: str) -> dict | None:
+- _REMEDIATION_SYSTEM_PROMPT = """You are an automated code-remediation agent for a Java / Spring Boot / Maven project.
+- 
+- You will receive:
+--  1. A list of security findings (id, severity, file, line, rule_id, evidence, suggested_fix).
+--  2. The current content of every file referenced by those findings.
+-+  1. A list of security findings (id, severity, class, file, line, rule_id, evidence, suggested_fix).
+-+  2. A per-finding context block that contains the file content you need
+-+     to produce a patch. The block's prefix tells you which class of
+-+     finding it is and which file the patch must target.
+- 
+- Your job: produce a STRICT JSON object describing SAFE, BEHAVIOR-PRESERVING
+- patches that fix as many findings as possible.
+-@@ -800,9 +956,9 @@ OUTPUT SCHEMA (return ONLY this JSON, no prose, no markdown fences):
+- {
+-   "patches": [
+-     {
+--      "file": "src/main/java/.../Foo.java",
+-+      "file": "src/main/java/.../Foo.java" | "pom.xml" | "Dockerfile",
+-       "new_content": "<FULL new file content after the fix>",
+--      "rule_id": "java:S2077",
+-+      "rule_id": "java:S2077" | "CVE-2026-22732" | "outdated-base-image",
+-       "finding_id": "SR-001",
+-       "description": "One-line description of the change"
+-     }
+-@@ -813,10 +969,32 @@ OUTPUT SCHEMA (return ONLY this JSON, no prose, no markdown fences):
+-   ]
+- }
+- 
+-+FINDING CLASSES AND PATCH TARGETS:
+-+  - SOURCE: real file path on disk (e.g. `src/main/java/.../Foo.java`).
+-+    The context block has the file content; emit a patch whose
+-+    `file` is that exact path.
+-+  - MAVEN: dependency coordinate (`g:a` or `g:a:v`). The context block
+-+    contains a `pom.xml` excerpt with the parent block and any
+-+    matching `<dependency>` block. Emit a patch with `file: "pom.xml"`
+-+    and a `new_content` that is the FULL pom.xml with the version
+-+    bump applied. Safe bumps are SAME-MAJOR only (e.g. 3.3.13 -> 3.5.14,
+-+    6.1.21 -> 6.2.11, 2.17.3 -> 2.18.8). NEVER bump the major version
+-+    (3.3.13 -> 4.0.6 is NOT safe). To bump a transitive dependency,
+-+    bump the parent; to bump a direct dependency, change its explicit
+-+    `<version>` or add one.
+-+  - OS: OS-package name (e.g. `gzip`, `bsdutils`). The context block
+-+    contains the runtime stage of the Dockerfile. Emit a patch with
+-+    `file: "Dockerfile"` and a `new_content` that adds
+-+    `apt-get upgrade -y --no-install-recommends` to the runtime
+-+    `RUN apt-get update` block, OR pins the base image to a more
+-+    recent patch tag, OR inserts a fresh `RUN apt-get update &&
+-+    apt-get upgrade -y && rm -rf /var/lib/apt/lists/*` block.
+-+
+- RULES:
+- - `new_content` MUST be the FULL file content, not a diff or a hunk.
+--- Only emit `patches` for files the user listed. Do not invent new files.
+--- If you cannot fix a finding safely, put it in `skipped` with a reason.
+-+- The `file` you emit MUST be a writable path. Allowed: `pom.xml`,
+-+  `Dockerfile`, `src/main/java/**/*.java`, `src/test/java/**/*.java`,
+-+  `src/main/resources/**`, `src/test/resources/**`.
+- - Cap patches at 10 and total new_content bytes at 256 KB.
+- - Be conservative: parameterise queries, hash passwords, escape output,
+-   validate inputs, add security headers. Do not introduce new
+-@@ -841,8 +1019,137 @@ RULES:
+- """
+- 
+- 
+-+def _classify_finding(finding: dict, repo_root: Path) -> str:
+-+    """Classify a security-review finding into one of:
+-+
+-+    - "source"   â€” `file` is a repo-relative path that exists on disk
+-+                   (e.g. `src/main/java/.../Foo.java`, `pom.xml`,
+-+                   `Dockerfile`). The LLM reads the file content and
+-+                   patches the code in place.
+-+    - "maven"    â€” `file` is a Maven coordinate (`g:a` or `g:a:v`).
+-+                   Trivy reports dependency CVEs this way. The fix
+-+                   lives in `pom.xml` (parent bump, explicit version
+-+                   override, or a new `<dependency>` block).
+-+    - "os"       â€” `file` is an OS-package name (no `:` in it) AND
+-+                   the Trivy scanner is `image`. The fix lives in
+-+                   the Dockerfile (base image bump or an
+-+                   `apt-get upgrade` step).
+-+    - "unknown"  â€” anything we can't classify. We still emit a
+-+                   finding block, but with no attached file content,
+-+                   so the LLM can either attempt a fix or skip.
+-+
+-+    The classifier is intentionally simple â€” we want to err on the
+-+    side of routing Maven / OS findings to the right place rather
+-+    than the default "look for a file with this name" behaviour
+-+    that previously caused all 10 dependency findings to be skipped
+-+    with a misleading `(NOT FOUND on disk)`.
+-+    """
+-+    rel = (finding.get("file") or "").replace("\\", "/").strip()
+-+    rule_id = (finding.get("rule_id") or "").upper()
+-+    title = (finding.get("title") or "").upper()
+-+    is_cve = rule_id.startswith("CVE-") or rule_id.startswith("GHSA-") or title.startswith("CVE-")
+-+    is_image = (
+-+        "scanner" in finding and finding.get("scanner") == "image"
+-+    ) or "library/" in (finding.get("evidence") or "")
+-+
+-+    # 1. Maven coordinate: contains `:` and at least one dot in the
+-+    #    group id (heuristic for `org.springframework:spring-core`).
+-+    if is_cve and ":" in rel and rel.split(":", 1)[0].count(".") >= 1:
+-+        return "maven"
+-+
+-+    # 2. OS package: no `:` in the name, image-scanner, CVE-shaped.
+-+    if is_cve and ":" not in rel and is_image:
+-+        return "os"
+-+
+-+    # 3. Real disk path: exists on the working tree.
+-+    if rel and (repo_root / rel).exists():
+-+        return "source"
+-+
+-+    # 4. CVE without a clear coordinate / path: probably a Trivy
+-+    #    finding that got flattened into the review. Treat as
+-+    #    a Maven/OS candidate by looking at the rule_id format.
+-+    if is_cve and ":" in rel:
+-+        return "maven"
+-+    if is_cve:
+-+        return "os"
+-+
+-+    return "unknown"
+-+
+-+
+-+def _read_pom_snippet_for_gav(repo_root: Path, gav: str) -> str:
+-+    """Return a small `pom.xml` excerpt relevant to a Maven
+-+    coordinate. The excerpt contains:
+-+      - the `<parent>` block (where Spring Boot parent is declared), and
+-+      - any `<dependency>` block whose `<artifactId>` matches the
+-+        GAV's artifact id (so the LLM can see if there's already
+-+        an explicit version override).
+-+
+-+    This is what the LLM needs in order to make a same-major
+-+    version bump decision. We do NOT send the whole pom.xml â€”
+-+    that wastes tokens and dilutes the signal.
+-+    """
+-+    pom_path = repo_root / "pom.xml"
+-+    if not pom_path.exists():
+-+        return "(pom.xml not present)"
+-+    text = pom_path.read_text(encoding="utf-8", errors="replace")
+-+
+-+    out: list[str] = []
+-+    # Parent block (bounded by `<parent>...</parent>`).
+-+    parent_pat = re.compile(r"<parent>.*?</parent>", re.DOTALL)
+-+    m = parent_pat.search(text)
+-+    if m:
+-+        out.append("--- <parent> block ---")
+-+        out.append(m.group(0))
+-+
+-+    # Find matching <dependency> blocks.
+-+    if ":" in gav:
+-+        group_id, artifact_id = gav.split(":", 1)
+-+        if ":" in artifact_id:
+-+            artifact_id = artifact_id.split(":", 1)[0]
+-+        dep_pat = re.compile(
+-+            r"<dependency>.*?</dependency>", re.DOTALL
+-+        )
+-+        matches: list[str] = []
+-+        for dm in dep_pat.finditer(text):
+-+            block = dm.group(0)
+-+            if (
+-+                re.search(rf"<groupId>\s*{re.escape(group_id)}\s*</groupId>", block)
+-+                and re.search(rf"<artifactId>\s*{re.escape(artifact_id)}\s*</artifactId>", block)
+-+            ):
+-+                matches.append(block)
+-+        if matches:
+-+            out.append(f"--- <dependency> blocks matching {gav} ---")
+-+            out.extend(matches)
+-+        else:
+-+            out.append(f"--- (no explicit <dependency> block for {gav}; the artifact is BOM-managed) ---")
+-+
+-+    if not out:
+-+        return "(no relevant pom.xml snippet found)"
+-+    return "\n".join(out)
+-+
+-+
+-+def _read_dockerfile_runtime(repo_root: Path) -> str:
+-+    """Return the runtime stage of the Dockerfile â€” the part after
+-+    the last `FROM` line. The OS-package findings are all about
+-+    packages inside this stage, so the LLM only needs the runtime
+-+    stage to plan a fix."""
+-+    path = repo_root / "Dockerfile"
+-+    if not path.exists():
+-+        return "(Dockerfile not present)"
+-+    text = path.read_text(encoding="utf-8", errors="replace")
+-+    from_positions = [m.start() for m in re.finditer(r"^FROM\s+", text, re.MULTILINE)]
+-+    if not from_positions:
+-+        return text
+-+    start = from_positions[-1]
+-+    return text[start:]
+-+
+-+
+- def _build_remediation_prompt(review: dict, repo_root: Path) -> str:
+--    """Build the user prompt: capped findings + per-file contents."""
+-+    """Build the user prompt: capped findings + per-finding context
+-+    blocks. Each finding gets one prompt block; the right file
+-+    content (source / pom.xml / Dockerfile) is attached based on
+-+    `_classify_finding` so the LLM can produce a valid patch.
+-+    """
+-     findings = (review or {}).get("findings") or []
+-     findings = sorted(
+-         findings,
+-@@ -856,37 +1163,87 @@ def _build_remediation_prompt(review: dict, repo_root: Path) -> str:
+-         "Produce safe, minimal patches for the following security findings.\n"
+-         "Coverage threshold is irrelevant here; fix the code, not the tests.\n"
+-         f"Severity scale: CRITICAL > HIGH > MEDIUM > LOW > INFO.\n"
+-+        "Each finding below is classified as SOURCE (real file on disk),\n"
+-+        "MAVEN (dependency coordinate â€” fix in pom.xml), or OS (OS\n"
+-+        "package â€” fix in Dockerfile). Read the file content attached to\n"
+-+        "each finding and emit a `patches[].file` path that matches it\n"
+-+        "exactly (the validator will reject any other path).\n"
+-     ]
+-     parts.append("===== FINDINGS (sorted by severity, capped at 20) =====")
+-     for f in findings:
+-         parts.append(
+-             f"- id={f.get('id', '?')} sev={f.get('severity', 'INFO')} "
+-+            f"class={_classify_finding(f, repo_root)} "
+-             f"file={f.get('file', '?')} line={f.get('line', '?')} "
+-             f"rule_id={f.get('rule_id', '?')}\n"
+-             f"  evidence: {(f.get('evidence') or '')[:300]}\n"
+-             f"  suggested_fix: {(f.get('suggested_fix') or '')[:300]}"
+-         )
+- 
+--    # Attach the current content of every file referenced by the findings.
+--    seen: set[str] = set()
+--    parts.append("\n===== CURRENT FILE CONTENTS =====")
+-+    # Attach per-finding context blocks. We key by finding id (not
+-+    # file) so two findings that share the same file each get their
+-+    # own block â€” earlier code deduped by file, which silently
+-+    # dropped the second gzip / third jackson-databind finding.
+-+    parts.append("\n===== FINDING CONTEXT (one block per finding) =====")
+-     for f in findings:
+--        rel = (f.get("file") or "").replace("\\", "/")
+--        if not rel or rel in seen:
+--            continue
+--        seen.add(rel)
+--        path = repo_root / rel
+--        if not path.exists():
+--            parts.append(f"\n----- {rel} (NOT FOUND on disk) -----")
+--            continue
+-+        fid = f.get("id", "?")
+-+        kind = _classify_finding(f, repo_root)
+-+        rel = (f.get("file") or "").replace("\\", "/").strip()
+-+        if kind == "source":
+-+            path = repo_root / rel
+-+            if path.exists():
+-+                try:
+-+                    content = path.read_text(encoding="utf-8", errors="replace")
+-+                except OSError as exc:
+-+                    parts.append(f"\n----- {fid} (SOURCE: {rel}) (READ ERROR: {exc}) -----")
+-+                    continue
+-+                if len(content.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
+-+                    content = content[:_LLM_MAX_FILE_BYTES] + "\n<!-- truncated -->\n"
+-+                parts.append(f"\n----- {fid} (SOURCE: {rel}) -----\n{content}")
+-+            else:
+-+                parts.append(f"\n----- {fid} (SOURCE: {rel}) (NOT FOUND on disk) -----")
+-+        elif kind == "maven":
+-+            snippet = _read_pom_snippet_for_gav(repo_root, rel)
+-+            parts.append(
+-+                f"\n----- {fid} (MAVEN: {rel}) â€” fix in pom.xml -----\n{snippet}"
+-+            )
+-+        elif kind == "os":
+-+            dockerfile = _read_dockerfile_runtime(repo_root)
+-+            if len(dockerfile.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
+-+                dockerfile = dockerfile[:_LLM_MAX_FILE_BYTES] + "\n# truncated\n"
+-+            parts.append(
+-+                f"\n----- {fid} (OS: {rel}) â€” fix in Dockerfile -----\n{dockerfile}"
+-+            )
+-+        else:
+-+            # Unknown / not classifiable â€” still emit a block, just
+-+            # without file content. The LLM can try or skip.
+-+            parts.append(
+-+                f"\n----- {fid} (UNKNOWN: {rel}) â€” no file content; either fix "
+-+                f"in pom.xml / Dockerfile based on the suggested_fix, or skip -----"
+-+            )
+-+
+-+    # Also attach the full pom.xml and Dockerfile at the end as a
+-+    # "context" so the LLM can emit either file as the patch target
+-+    # even if it wasn't the one we quoted in the per-finding block.
+-+    parts.append("\n===== PROJECT CONTEXT (use these as patch targets) =====")
+-+    pom = repo_root / "pom.xml"
+-+    if pom.exists():
+-         try:
+--            content = path.read_text(encoding="utf-8", errors="replace")
+--        except OSError as exc:
+--            parts.append(f"\n----- {rel} (READ ERROR: {exc}) -----")
+--            continue
+-+            content = pom.read_text(encoding="utf-8", errors="replace")
+-+        except OSError:
+-+            content = ""
+-         if len(content.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
+-             content = content[:_LLM_MAX_FILE_BYTES] + "\n<!-- truncated -->\n"
+--        parts.append(f"\n----- {rel} -----\n{content}")
+-+        parts.append(f"\n----- pom.xml -----\n{content}")
+-+    df = repo_root / "Dockerfile"
+-+    if df.exists():
+-+        try:
+-+            content = df.read_text(encoding="utf-8", errors="replace")
+-+        except OSError:
+-+            content = ""
+-+        if len(content.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
+-+            content = content[:_LLM_MAX_FILE_BYTES] + "\n# truncated\n"
+-+        parts.append(f"\n----- Dockerfile -----\n{content}")
+- 
+-     parts.append(
+-         "\nReturn ONLY the JSON object. No commentary, no markdown fences."
+-@@ -1201,6 +1558,7 @@ def main() -> int:
+-     all_fixes += fix_sql_concat(args.repo_root)
+-     all_fixes += fix_plain_password(args.repo_root)
+-     all_fixes += fix_bump_dependencies(args.repo_root, trivy_findings)
+-+    all_fixes += fix_bump_dockerfile_base(args.repo_root, trivy_findings)
+-     all_fixes += fix_add_csp(args.repo_root)
+- 
+-     # LLM patch pass: ask the model for additional per-file patches and
+diff --git a/reports-test/changed-files.txt b/reports-test/changed-files.txt
+index 7a060ab..13c6e8f 100644
+--- a/reports-test/changed-files.txt
++++ b/reports-test/changed-files.txt
+@@ -1,2 +1,7 @@
++reports-test/ai-patch.diff
++reports-test/changed-files.txt
++reports-test/git-diff-stat.txt
++reports-test/remediation-summary.md
+ scripts/__pycache__/ai-remediation.cpython-312.pyc
++scripts/__pycache__/generate-sonar-report.cpython-312.pyc
+ scripts/ai-remediation.py
+diff --git a/reports-test/git-diff-stat.txt b/reports-test/git-diff-stat.txt
+index 285a96f..b148617 100644
+--- a/reports-test/git-diff-stat.txt
++++ b/reports-test/git-diff-stat.txt
+@@ -1,3 +1,8 @@
+- scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 54534 -> 72622 bytes
+- scripts/ai-remediation.py                          | 478 ++++++++++++++++++---
+- 2 files changed, 418 insertions(+), 60 deletions(-)
++ reports-test/ai-patch.diff                         | 588 ---------------------
++ reports-test/changed-files.txt                     |   2 -
++ reports-test/git-diff-stat.txt                     |   3 -
++ reports-test/remediation-summary.md                |  26 -
++ scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 72622 -> 74790 bytes
++ .../generate-sonar-report.cpython-312.pyc          | Bin 33749 -> 0 bytes
++ scripts/ai-remediation.py                          | 107 +++-
++ 7 files changed, 96 insertions(+), 630 deletions(-)
+diff --git a/reports-test/remediation-summary.md b/reports-test/remediation-summary.md
+deleted file mode 100644
+index b6c4a4e..0000000
+--- a/reports-test/remediation-summary.md
++++ /dev/null
+@@ -1,26 +0,0 @@
+-# AI Auto-Remediation Summary
+-
+-- **Status:** NO_CHANGES
+-- **Safe fixes applied:** 0 (deterministic: 0, LLM: 0)
+-- **Files changed:** 2
+-
+-## Fixed (deterministic)
+-
+-- (none)
+-- No safe automated fixes were applicable.
+-
+-## Diff stat
+-
+-```
+-scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 54534 -> 72622 bytes
+- scripts/ai-remediation.py                          | 478 ++++++++++++++++++---
+- 2 files changed, 418 insertions(+), 60 deletions(-)
+-```
+-
+-## Reviewer checklist
+-
+-- [ ] Confirm no business logic was changed
+-- [ ] Run `mvn -B -ntp -Pcoverage verify` locally
+-- [ ] Review the unified diff in `ai-patch.diff`
+-- [ ] For LLM fixes, sanity-check the new file content end-to-end
+-- [ ] Approve the PR if the changes are acceptable
 diff --git a/scripts/__pycache__/ai-remediation.cpython-312.pyc b/scripts/__pycache__/ai-remediation.cpython-312.pyc
-index bdaaae5..993b726 100644
+index 993b726..64a2bdc 100644
 Binary files a/scripts/__pycache__/ai-remediation.cpython-312.pyc and b/scripts/__pycache__/ai-remediation.cpython-312.pyc differ
+diff --git a/scripts/__pycache__/generate-sonar-report.cpython-312.pyc b/scripts/__pycache__/generate-sonar-report.cpython-312.pyc
+deleted file mode 100644
+index e41fad8..0000000
+Binary files a/scripts/__pycache__/generate-sonar-report.cpython-312.pyc and /dev/null differ
 diff --git a/scripts/ai-remediation.py b/scripts/ai-remediation.py
-index 1e3489c..3481e06 100644
+index 3481e06..9b4bb14 100644
 --- a/scripts/ai-remediation.py
 +++ b/scripts/ai-remediation.py
-@@ -85,6 +85,64 @@ def _write(path: Path, content: str) -> None:
-     path.write_text(content, encoding="utf-8")
+@@ -68,8 +68,17 @@ POM_PATH = "pom.xml"
  
  
-+def _parse_semver(v: str) -> tuple[int, int, int] | None:
-+    """Parse the leading MAJOR.MINOR.PATCH from a version string.
+ def _run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
+-    """Run a command and return the CompletedProcess. On error, print stderr."""
+-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
++    """Run a command and return the CompletedProcess. On error, print stderr.
 +
-+    Strips trailing qualifiers (`-ubuntu4.2`, `-RELEASE`, `-SNAPSHOT`,
-+    leading `1:` epoch prefix) and returns a 3-tuple of ints. Returns
-+    None when no dotted version is found (e.g. the "Link: ..." sentinel
-+    Trivy returns for "no fix available" advisories).
-+    """
-+    if not v:
-+        return None
-+    # Strip Debian/RPM epoch prefix.
-+    s = v.strip()
-+    if ":" in s:
-+        s = s.split(":", 1)[1]
-+    # Take the leading dotted run.
-+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", s)
-+    if not m:
-+        return None
-+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
-+
-+
-+def _pick_safe_bump(current: str, candidates: str) -> str | None:
-+    """Pick a safe bump target from a Trivy `fixedVersion` string.
-+
-+    Trivy sometimes lists multiple fixed versions separated by `,`, e.g.
-+    `"4.0.6, 3.5.14"`. The previous logic in this fixer took only the
-+    first entry, which meant a fix like `3.3.13 -> 3.5.14` was rejected
-+    because the first candidate (`4.0.6`) was a major bump.
-+
-+    Strategy:
-+      1. Split `candidates` on `,` and strip each entry.
-+      2. Drop "Link: ..." / URL-only entries (those mean "no fix").
-+      3. From the remaining list, return the first candidate whose
-+         MAJOR equals `current`'s MAJOR (covers both patch-only and
-+         same-major minor upgrades). Same-major is the only safe bump
-+         Spring Boot / Jackson etc. accept without breaking ABI.
-+      4. If none match, return None and let the caller skip.
-+
-+    Returns the chosen candidate string, or None.
++    Uses UTF-8 with `errors="replace"` so that git output containing
++    non-ASCII bytes (file paths, diff hunks with non-ASCII source)
++    does not crash the parent on Windows, where the system default
++    codec is cp1252. The crash was reproducible on `git diff` when
++    the diff contained even a single non-cp1252 byte."""
++    proc = subprocess.run(
++        cmd, cwd=cwd, capture_output=True, text=True,
++        encoding="utf-8", errors="replace", check=False,
++    )
+     if check and proc.returncode != 0:
+         print(f"::warning::Command failed: {' '.join(cmd)}", file=sys.stderr)
+         print(proc.stdout, file=sys.stderr)
+@@ -143,6 +152,69 @@ def _pick_safe_bump(current: str, candidates: str) -> str | None:
+     return None
+ 
+ 
++def _is_upgrade(current: str, candidate: str) -> bool:
++    """True iff `candidate` is strictly newer than `current` on the
++    same major. Used to prevent the bumper from picking a same-major
++    DOWNGRADE (e.g. parent 3.3.13 -> 3.1.4). Returns False for
++    invalid inputs.
 +    """
 +    cur = _parse_semver(current)
-+    if cur is None:
-+        return None
-+    cur_major = cur[0]
-+    for raw in (c.strip() for c in (candidates or "").split(",")):
-+        if not raw:
-+            continue
-+        # Skip "Link: ..." / URL-only sentinels.
-+        if raw.lower().startswith("link:") or raw.lower().startswith("http"):
-+            continue
-+        cand = _parse_semver(raw)
-+        if cand is None:
-+            continue
-+        if cand[0] == cur_major:
-+            return raw
++    cand = _parse_semver(candidate)
++    if not cur or not cand:
++        return False
++    if cand[0] != cur[0]:
++        return False
++    if cand[1] > cur[1]:
++        return True
++    if cand[1] == cur[1] and cand[2] >= cur[2]:
++        return True
++    return False
++
++
++def _pick_parent_target(current_parent_version: str, actionable: list[dict]) -> str | None:
++    """Pick a safe target version for `spring-boot-starter-parent`.
++
++    Looks at the *parent*'s own `fixedVersion` first (`org.springframework
++    .boot:spring-boot`), then at any `org.springframework.boot:*` starter's
++    `fixedVersion` (they all share the SB major-minor scheme), and only
++    falls back to a transitive finding's `fixedVersion` as a last resort.
++    This avoids the bug where the trigger finding was a transitive library
++    (e.g. jackson-databind 2.x) and the fixer wrote `2.18.8` into the
++    parent slot — a major-version downgrade.
++    """
++    # All SB artifacts that share the parent's version scheme.
++    parent_pkgs = {
++        "org.springframework.boot:spring-boot",
++        "org.springframework.boot:spring-boot-starter-web",
++        "org.springframework.boot:spring-boot-starter-data-jpa",
++        "org.springframework.boot:spring-boot-starter-security",
++        "org.springframework.boot:spring-boot-starter-tomcat",
++        "org.springframework.boot:spring-boot-starter-logging",
++    }
++    # Priority 1: the parent artifact's own fixedVersion.
++    for a in actionable:
++        if a["pkg"] == "org.springframework.boot:spring-boot":
++            target = _pick_safe_bump(current_parent_version, a["fixed"])
++            if target and _is_upgrade(current_parent_version, target):
++                return target
++    # Priority 2: any SB starter artifact (they share the version scheme).
++    for a in actionable:
++        if a["pkg"] in parent_pkgs:
++            target = _pick_safe_bump(current_parent_version, a["fixed"])
++            if target and _is_upgrade(current_parent_version, target):
++                return target
++    # Priority 3: any other SB-managed artifact — the version scheme
++    # may not match the parent's, so we already filtered by
++    # _is_upgrade in `_pick_safe_bump` and the function returns None
++    # for version-scheme mismatches, so this is a safety net only.
++    for a in actionable:
++        if a["pkg"].startswith("org.springframework.boot:"):
++            target = _pick_safe_bump(current_parent_version, a["fixed"])
++            if target and _is_upgrade(current_parent_version, target):
++                return target
 +    return None
 +
 +
  # ---------------------------------------------------------------------
- # Safe fixers â€” each returns a list of "fix" dicts for the report.
+ # Safe fixers — each returns a list of "fix" dicts for the report.
  # ---------------------------------------------------------------------
-@@ -353,34 +411,34 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+@@ -398,6 +470,12 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+         "org.apache.tomcat.embed:tomcat-embed-websocket",
+         "org.hibernate.orm:hibernate-core",
+     }
++    # The "trigger" finding is the first SB-managed artifact that has a
++    # CRITICAL/HIGH advisory. We only need its existence to decide
++    # "yes, we should consider a parent bump" — the *target version*
++    # always comes from the `org.springframework.boot:spring-boot`
++    # finding (or any spring-boot-* starter), because that's the
++    # artifact that lives in the same version scheme as the parent.
+     sb_finding = next(
+         (a for a in actionable if a["pkg"] in sb_managed_artifacts),
+         None,
+@@ -411,14 +489,17 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
          m = parent_pat.search(new)
          if m:
              old_version = m.group(2).strip()
--            new_version = sb_finding["fixed"].strip()
--            if old_version != new_version:
--                # Only act on patch/minor bumps (same major). Don't auto-bump majors.
--                def _major(v: str) -> str:
--                    return v.split(".", 1)[0]
--                if _major(old_version) == _major(new_version):
--                    new = parent_pat.sub(
--                        lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}",
--                        new,
--                        count=1,
--                    )
--                    fixes.append({
--                        "rule": "outdated-dependency",
--                        "category": "dependency",
--                        "file": POM_PATH,
--                        "description": (
--                            f"Bumped spring-boot-starter-parent from {old_version} to "
--                            f"{new_version} (transitive fix for {sb_finding['pkg']})"
--                        ),
--                        "safe": True,
--                        "old_version": old_version,
--                        "new_version": new_version,
--                    })
--                    # Once we bump the parent, all the BOM-managed findings
--                    # are addressed â€” skip the direct-dependency pass.
--                    if new != original:
--                        _write(pom, new)
--                    return fixes
-+            # Trivy may list several fixed versions ("4.0.6, 3.5.14");
-+            # try every candidate and pick the first one on the same
-+            # major. Picking only the first entry used to reject
-+            # legitimate same-major minor bumps like 3.3.13 -> 3.5.14.
-+            new_version = _pick_safe_bump(old_version, sb_finding["fixed"])
-+            if new_version and old_version != new_version:
-+                new = parent_pat.sub(
-+                    lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}",
-+                    new,
-+                    count=1,
-+                )
-+                fixes.append({
-+                    "rule": "outdated-dependency",
-+                    "category": "dependency",
-+                    "file": POM_PATH,
-+                    "description": (
-+                        f"Bumped spring-boot-starter-parent from {old_version} to "
-+                        f"{new_version} (transitive fix for {sb_finding['pkg']})"
-+                    ),
-+                    "safe": True,
-+                    "old_version": old_version,
-+                    "new_version": new_version,
-+                })
-+                # Once we bump the parent, all the BOM-managed findings
-+                # are addressed â€” skip the direct-dependency pass.
-+                if new != original:
-+                    _write(pom, new)
-+                return fixes
-         # If sb_finding exists but there's no parent to bump, fall through
-         # to Strategy 2 (in case any actionable finding matches a direct
-         # dependency).
-@@ -389,7 +447,6 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
-     # explicit <version> in pom.xml for the artifact) ----
-     for a in actionable:
-         pkg = a["pkg"]
--        fixed = a["fixed"]
-         if ":" not in pkg:
-             continue
-         group_id, artifact_id = pkg.split(":", 1)
-@@ -402,21 +459,20 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
-         if not m:
-             continue
+-            # Trivy may list several fixed versions ("4.0.6, 3.5.14");
+-            # try every candidate and pick the first one on the same
+-            # major. Picking only the first entry used to reject
+-            # legitimate same-major minor bumps like 3.3.13 -> 3.5.14.
+-            new_version = _pick_safe_bump(old_version, sb_finding["fixed"])
+-            if new_version and old_version != new_version:
++            # Pick the parent-bump target by looking at the SB parent
++            # CVE's `fixedVersion` first, then at any SB starter's
++            # `fixedVersion`, then at the trigger finding. Using the
++            # trigger finding directly is WRONG — its version scheme
++            # is the artifact's (e.g. jackson-databind 2.x), not the
++            # parent's (3.x), which used to produce nonsensical
++            # "bump parent to 3.1.4" suggestions.
++            parent_target = _pick_parent_target(old_version, actionable)
++            if parent_target and old_version != parent_target:
+                 new = parent_pat.sub(
+-                    lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}",
++                    lambda mm: f"{mm.group(1)}{parent_target}{mm.group(3)}",
+                     new,
+                     count=1,
+                 )
+@@ -428,11 +509,11 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
+                     "file": POM_PATH,
+                     "description": (
+                         f"Bumped spring-boot-starter-parent from {old_version} to "
+-                        f"{new_version} (transitive fix for {sb_finding['pkg']})"
++                        f"{parent_target} (transitive fix for {sb_finding['pkg']})"
+                     ),
+                     "safe": True,
+                     "old_version": old_version,
+-                    "new_version": new_version,
++                    "new_version": parent_target,
+                 })
+                 # Once we bump the parent, all the BOM-managed findings
+                 # are addressed — skip the direct-dependency pass.
+@@ -461,9 +542,13 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
          old_version = m.group(2).strip()
--        if old_version == fixed:
--            continue
--        def _major(v: str) -> str:
--            return v.split(".", 1)[0]
--        if _major(old_version) != _major(fixed):
-+        # Same multi-candidate handling as the parent-bump branch: pick
-+        # the first same-major entry from Trivy's fixed-version list.
-+        new_version = _pick_safe_bump(old_version, a["fixed"])
-+        if not new_version or new_version == old_version:
+         # Same multi-candidate handling as the parent-bump branch: pick
+         # the first same-major entry from Trivy's fixed-version list.
++        # We additionally require the target to be an UPGRADE (not a
++        # same-major downgrade like 6.1.21 -> 6.0.0).
+         new_version = _pick_safe_bump(old_version, a["fixed"])
+         if not new_version or new_version == old_version:
              continue
--        new = pat.sub(lambda mm: f"{mm.group(1)}{fixed}{mm.group(3)}", new, count=1)
-+        new = pat.sub(lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}", new, count=1)
++        if not _is_upgrade(old_version, new_version):
++            continue
+         new = pat.sub(lambda mm: f"{mm.group(1)}{new_version}{mm.group(3)}", new, count=1)
          fixes.append({
              "rule": "outdated-dependency",
-             "category": "dependency",
-             "file": POM_PATH,
--            "description": f"Bumped {pkg} from {old_version} to {fixed}",
-+            "description": f"Bumped {pkg} from {old_version} to {new_version}",
-             "safe": True,
-             "old_version": old_version,
--            "new_version": fixed,
-+            "new_version": new_version,
-         })
- 
-     if new != original:
-@@ -424,6 +480,104 @@ def fix_bump_dependencies(repo_root: Path, trivy_report: dict) -> list[dict]:
-     return fixes
- 
- 
-+def fix_bump_dockerfile_base(repo_root: Path, trivy_report) -> list[dict]:
-+    """Patch the Dockerfile runtime stage to pull the latest OS security
-+    updates. Most of the Trivy image-scanner findings the security
-+    review emits (bsdutils, gzip, libc-bin, libblkid1, etc.) are
-+    OS-package CVEs in the runtime base image. They cannot be fixed
-+    in Java code; they have to be fixed at the image level.
-+
-+    The conservative, deterministic fix that works for any
-+    Ubuntu/Debian base image is to add `apt-get upgrade -y` to the
-+    runtime stage's `RUN apt-get update` block. This pulls every
-+    published security-pocket update for the codename, which closes
-+    the OS-package CVEs Trivy reports.
-+
-+    Idempotency: the marker `FIX_DOCKERFILE_BASE_APPLIED` is added to
-+    the comment of the `apt-get` line so a re-run is a no-op.
-+    """
-+    fixes: list[dict] = []
-+    dockerfile = repo_root / "Dockerfile"
-+    if not dockerfile.exists():
-+        return fixes
-+    findings = trivy_report if isinstance(trivy_report, list) else trivy_report.get("findings", [])
-+    # Only act on image-level OS-package findings. SonarQube code-smell
-+    # findings and Maven-coordinate findings are not relevant here.
-+    os_findings = [
-+        f for f in findings
-+        if (f.get("scanner") == "image" or "library/" in (f.get("file") or ""))
-+        and (f.get("severity") or "").upper() in {"CRITICAL", "HIGH", "MEDIUM"}
-+        and ":" not in (f.get("pkgName") or "")  # exclude Maven coordinates
-+    ]
-+    if not os_findings:
-+        return fixes
-+    original = _read(dockerfile)
-+    if "FIX_DOCKERFILE_BASE_APPLIED" in original:
-+        return fixes  # idempotent
-+    new = original
-+    # Strategy A: append `&& apt-get upgrade -y` to an existing
-+    # `apt-get update` line in the runtime stage (any stage after the
-+    # last `FROM`). This is the safest universal fix â€” it pulls
-+    # every security-pocket update for the current codename without
-+    # requiring us to know a specific patch date.
-+    # Match `apt-get update \\\n` (with the trailing backslash and
-+    # newline, which is the Dockerfile line-continuation pattern) so
-+    # the replacement preserves the line layout bash needs.
-+    apt_pat = re.compile(
-+        r"(?P<lead>apt-get\s+update\s*\\\s*\n)"
-+        r"(?P<rest>\s*&&)",
-+    )
-+    m = apt_pat.search(new)
-+    if m:
-+        from_positions = [mm.start() for mm in re.finditer(r"^FROM\s+", new, re.MULTILINE)]
-+        last_from = from_positions[-1] if from_positions else -1
-+        if last_from == -1 or m.start() >= last_from:
-+            # `lead` ends with `apt-get update \\\n`; we insert
-+            # ` && apt-get upgrade -y --no-install-recommends \\\n`
-+            # right after it so the next original line continues
-+            # seamlessly. The match is greedy on `lead` so `rest`
-+            # always begins with ` && ...`.
-+            upgrade_line = " && apt-get upgrade -y --no-install-recommends \\\n"
-+            new = (
-+                new[: m.end("lead")]
-+                + upgrade_line
-+                + new[m.end("lead"):]
-+            )
-+    # Strategy B: if there's no apt-get block to extend, insert a fresh
-+    # one right after the runtime `FROM` line.
-+    if new == original:
-+        from_pat = re.compile(
-+            r"^(FROM\s+\S+[^\n]*\n)(?!.*^FROM\s+)",  # last FROM line
-+            re.MULTILINE | re.DOTALL,
-+        )
-+        m = from_pat.search(new)
-+        if m:
-+            insertion = (
-+                "\n# VULNERABILITY FIX (AI auto-remediation, marker FIX_DOCKERFILE_BASE_APPLIED):\n"
-+                "# Pull the latest OS security updates to remediate image-level Trivy findings.\n"
-+                "RUN apt-get update \\\n"
-+                " && apt-get upgrade -y --no-install-recommends \\\n"
-+                " && rm -rf /var/lib/apt/lists/*\n"
-+            )
-+            new = new[: m.end()] + insertion + new[m.end():]
-+    if new != original:
-+        _write(dockerfile, new)
-+        pkg_names = sorted({f.get("pkgName") for f in os_findings if f.get("pkgName")})[:5]
-+        fixes.append({
-+            "rule": "outdated-base-image",
-+            "category": "vulnerability",
-+            "file": "Dockerfile",
-+            "description": (
-+                f"Added `apt-get upgrade -y` to runtime stage to remediate "
-+                f"image-level OS-package CVEs ({len(os_findings)} findings, "
-+                f"e.g. {', '.join(pkg_names)})"
-+            ),
-+            "safe": True,
-+            "fixes_count": len(os_findings),
-+        })
-+    return fixes
-+
-+
- def fix_add_csp(repo_root: Path) -> list[dict]:
-     """Add a Content-Security-Policy header to `SecurityConfig.java`.
- 
-@@ -790,8 +944,10 @@ def _extract_json(text: str) -> dict | None:
- _REMEDIATION_SYSTEM_PROMPT = """You are an automated code-remediation agent for a Java / Spring Boot / Maven project.
- 
- You will receive:
--  1. A list of security findings (id, severity, file, line, rule_id, evidence, suggested_fix).
--  2. The current content of every file referenced by those findings.
-+  1. A list of security findings (id, severity, class, file, line, rule_id, evidence, suggested_fix).
-+  2. A per-finding context block that contains the file content you need
-+     to produce a patch. The block's prefix tells you which class of
-+     finding it is and which file the patch must target.
- 
- Your job: produce a STRICT JSON object describing SAFE, BEHAVIOR-PRESERVING
- patches that fix as many findings as possible.
-@@ -800,9 +956,9 @@ OUTPUT SCHEMA (return ONLY this JSON, no prose, no markdown fences):
- {
-   "patches": [
-     {
--      "file": "src/main/java/.../Foo.java",
-+      "file": "src/main/java/.../Foo.java" | "pom.xml" | "Dockerfile",
-       "new_content": "<FULL new file content after the fix>",
--      "rule_id": "java:S2077",
-+      "rule_id": "java:S2077" | "CVE-2026-22732" | "outdated-base-image",
-       "finding_id": "SR-001",
-       "description": "One-line description of the change"
-     }
-@@ -813,10 +969,32 @@ OUTPUT SCHEMA (return ONLY this JSON, no prose, no markdown fences):
-   ]
- }
- 
-+FINDING CLASSES AND PATCH TARGETS:
-+  - SOURCE: real file path on disk (e.g. `src/main/java/.../Foo.java`).
-+    The context block has the file content; emit a patch whose
-+    `file` is that exact path.
-+  - MAVEN: dependency coordinate (`g:a` or `g:a:v`). The context block
-+    contains a `pom.xml` excerpt with the parent block and any
-+    matching `<dependency>` block. Emit a patch with `file: "pom.xml"`
-+    and a `new_content` that is the FULL pom.xml with the version
-+    bump applied. Safe bumps are SAME-MAJOR only (e.g. 3.3.13 -> 3.5.14,
-+    6.1.21 -> 6.2.11, 2.17.3 -> 2.18.8). NEVER bump the major version
-+    (3.3.13 -> 4.0.6 is NOT safe). To bump a transitive dependency,
-+    bump the parent; to bump a direct dependency, change its explicit
-+    `<version>` or add one.
-+  - OS: OS-package name (e.g. `gzip`, `bsdutils`). The context block
-+    contains the runtime stage of the Dockerfile. Emit a patch with
-+    `file: "Dockerfile"` and a `new_content` that adds
-+    `apt-get upgrade -y --no-install-recommends` to the runtime
-+    `RUN apt-get update` block, OR pins the base image to a more
-+    recent patch tag, OR inserts a fresh `RUN apt-get update &&
-+    apt-get upgrade -y && rm -rf /var/lib/apt/lists/*` block.
-+
- RULES:
- - `new_content` MUST be the FULL file content, not a diff or a hunk.
--- Only emit `patches` for files the user listed. Do not invent new files.
--- If you cannot fix a finding safely, put it in `skipped` with a reason.
-+- The `file` you emit MUST be a writable path. Allowed: `pom.xml`,
-+  `Dockerfile`, `src/main/java/**/*.java`, `src/test/java/**/*.java`,
-+  `src/main/resources/**`, `src/test/resources/**`.
- - Cap patches at 10 and total new_content bytes at 256 KB.
- - Be conservative: parameterise queries, hash passwords, escape output,
-   validate inputs, add security headers. Do not introduce new
-@@ -841,8 +1019,137 @@ RULES:
- """
- 
- 
-+def _classify_finding(finding: dict, repo_root: Path) -> str:
-+    """Classify a security-review finding into one of:
-+
-+    - "source"   â€” `file` is a repo-relative path that exists on disk
-+                   (e.g. `src/main/java/.../Foo.java`, `pom.xml`,
-+                   `Dockerfile`). The LLM reads the file content and
-+                   patches the code in place.
-+    - "maven"    â€” `file` is a Maven coordinate (`g:a` or `g:a:v`).
-+                   Trivy reports dependency CVEs this way. The fix
-+                   lives in `pom.xml` (parent bump, explicit version
-+                   override, or a new `<dependency>` block).
-+    - "os"       â€” `file` is an OS-package name (no `:` in it) AND
-+                   the Trivy scanner is `image`. The fix lives in
-+                   the Dockerfile (base image bump or an
-+                   `apt-get upgrade` step).
-+    - "unknown"  â€” anything we can't classify. We still emit a
-+                   finding block, but with no attached file content,
-+                   so the LLM can either attempt a fix or skip.
-+
-+    The classifier is intentionally simple â€” we want to err on the
-+    side of routing Maven / OS findings to the right place rather
-+    than the default "look for a file with this name" behaviour
-+    that previously caused all 10 dependency findings to be skipped
-+    with a misleading `(NOT FOUND on disk)`.
-+    """
-+    rel = (finding.get("file") or "").replace("\\", "/").strip()
-+    rule_id = (finding.get("rule_id") or "").upper()
-+    title = (finding.get("title") or "").upper()
-+    is_cve = rule_id.startswith("CVE-") or rule_id.startswith("GHSA-") or title.startswith("CVE-")
-+    is_image = (
-+        "scanner" in finding and finding.get("scanner") == "image"
-+    ) or "library/" in (finding.get("evidence") or "")
-+
-+    # 1. Maven coordinate: contains `:` and at least one dot in the
-+    #    group id (heuristic for `org.springframework:spring-core`).
-+    if is_cve and ":" in rel and rel.split(":", 1)[0].count(".") >= 1:
-+        return "maven"
-+
-+    # 2. OS package: no `:` in the name, image-scanner, CVE-shaped.
-+    if is_cve and ":" not in rel and is_image:
-+        return "os"
-+
-+    # 3. Real disk path: exists on the working tree.
-+    if rel and (repo_root / rel).exists():
-+        return "source"
-+
-+    # 4. CVE without a clear coordinate / path: probably a Trivy
-+    #    finding that got flattened into the review. Treat as
-+    #    a Maven/OS candidate by looking at the rule_id format.
-+    if is_cve and ":" in rel:
-+        return "maven"
-+    if is_cve:
-+        return "os"
-+
-+    return "unknown"
-+
-+
-+def _read_pom_snippet_for_gav(repo_root: Path, gav: str) -> str:
-+    """Return a small `pom.xml` excerpt relevant to a Maven
-+    coordinate. The excerpt contains:
-+      - the `<parent>` block (where Spring Boot parent is declared), and
-+      - any `<dependency>` block whose `<artifactId>` matches the
-+        GAV's artifact id (so the LLM can see if there's already
-+        an explicit version override).
-+
-+    This is what the LLM needs in order to make a same-major
-+    version bump decision. We do NOT send the whole pom.xml â€”
-+    that wastes tokens and dilutes the signal.
-+    """
-+    pom_path = repo_root / "pom.xml"
-+    if not pom_path.exists():
-+        return "(pom.xml not present)"
-+    text = pom_path.read_text(encoding="utf-8", errors="replace")
-+
-+    out: list[str] = []
-+    # Parent block (bounded by `<parent>...</parent>`).
-+    parent_pat = re.compile(r"<parent>.*?</parent>", re.DOTALL)
-+    m = parent_pat.search(text)
-+    if m:
-+        out.append("--- <parent> block ---")
-+        out.append(m.group(0))
-+
-+    # Find matching <dependency> blocks.
-+    if ":" in gav:
-+        group_id, artifact_id = gav.split(":", 1)
-+        if ":" in artifact_id:
-+            artifact_id = artifact_id.split(":", 1)[0]
-+        dep_pat = re.compile(
-+            r"<dependency>.*?</dependency>", re.DOTALL
-+        )
-+        matches: list[str] = []
-+        for dm in dep_pat.finditer(text):
-+            block = dm.group(0)
-+            if (
-+                re.search(rf"<groupId>\s*{re.escape(group_id)}\s*</groupId>", block)
-+                and re.search(rf"<artifactId>\s*{re.escape(artifact_id)}\s*</artifactId>", block)
-+            ):
-+                matches.append(block)
-+        if matches:
-+            out.append(f"--- <dependency> blocks matching {gav} ---")
-+            out.extend(matches)
-+        else:
-+            out.append(f"--- (no explicit <dependency> block for {gav}; the artifact is BOM-managed) ---")
-+
-+    if not out:
-+        return "(no relevant pom.xml snippet found)"
-+    return "\n".join(out)
-+
-+
-+def _read_dockerfile_runtime(repo_root: Path) -> str:
-+    """Return the runtime stage of the Dockerfile â€” the part after
-+    the last `FROM` line. The OS-package findings are all about
-+    packages inside this stage, so the LLM only needs the runtime
-+    stage to plan a fix."""
-+    path = repo_root / "Dockerfile"
-+    if not path.exists():
-+        return "(Dockerfile not present)"
-+    text = path.read_text(encoding="utf-8", errors="replace")
-+    from_positions = [m.start() for m in re.finditer(r"^FROM\s+", text, re.MULTILINE)]
-+    if not from_positions:
-+        return text
-+    start = from_positions[-1]
-+    return text[start:]
-+
-+
- def _build_remediation_prompt(review: dict, repo_root: Path) -> str:
--    """Build the user prompt: capped findings + per-file contents."""
-+    """Build the user prompt: capped findings + per-finding context
-+    blocks. Each finding gets one prompt block; the right file
-+    content (source / pom.xml / Dockerfile) is attached based on
-+    `_classify_finding` so the LLM can produce a valid patch.
-+    """
-     findings = (review or {}).get("findings") or []
-     findings = sorted(
-         findings,
-@@ -856,37 +1163,87 @@ def _build_remediation_prompt(review: dict, repo_root: Path) -> str:
-         "Produce safe, minimal patches for the following security findings.\n"
-         "Coverage threshold is irrelevant here; fix the code, not the tests.\n"
-         f"Severity scale: CRITICAL > HIGH > MEDIUM > LOW > INFO.\n"
-+        "Each finding below is classified as SOURCE (real file on disk),\n"
-+        "MAVEN (dependency coordinate â€” fix in pom.xml), or OS (OS\n"
-+        "package â€” fix in Dockerfile). Read the file content attached to\n"
-+        "each finding and emit a `patches[].file` path that matches it\n"
-+        "exactly (the validator will reject any other path).\n"
-     ]
-     parts.append("===== FINDINGS (sorted by severity, capped at 20) =====")
-     for f in findings:
-         parts.append(
-             f"- id={f.get('id', '?')} sev={f.get('severity', 'INFO')} "
-+            f"class={_classify_finding(f, repo_root)} "
-             f"file={f.get('file', '?')} line={f.get('line', '?')} "
-             f"rule_id={f.get('rule_id', '?')}\n"
-             f"  evidence: {(f.get('evidence') or '')[:300]}\n"
-             f"  suggested_fix: {(f.get('suggested_fix') or '')[:300]}"
-         )
- 
--    # Attach the current content of every file referenced by the findings.
--    seen: set[str] = set()
--    parts.append("\n===== CURRENT FILE CONTENTS =====")
-+    # Attach per-finding context blocks. We key by finding id (not
-+    # file) so two findings that share the same file each get their
-+    # own block â€” earlier code deduped by file, which silently
-+    # dropped the second gzip / third jackson-databind finding.
-+    parts.append("\n===== FINDING CONTEXT (one block per finding) =====")
-     for f in findings:
--        rel = (f.get("file") or "").replace("\\", "/")
--        if not rel or rel in seen:
--            continue
--        seen.add(rel)
--        path = repo_root / rel
--        if not path.exists():
--            parts.append(f"\n----- {rel} (NOT FOUND on disk) -----")
--            continue
-+        fid = f.get("id", "?")
-+        kind = _classify_finding(f, repo_root)
-+        rel = (f.get("file") or "").replace("\\", "/").strip()
-+        if kind == "source":
-+            path = repo_root / rel
-+            if path.exists():
-+                try:
-+                    content = path.read_text(encoding="utf-8", errors="replace")
-+                except OSError as exc:
-+                    parts.append(f"\n----- {fid} (SOURCE: {rel}) (READ ERROR: {exc}) -----")
-+                    continue
-+                if len(content.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
-+                    content = content[:_LLM_MAX_FILE_BYTES] + "\n<!-- truncated -->\n"
-+                parts.append(f"\n----- {fid} (SOURCE: {rel}) -----\n{content}")
-+            else:
-+                parts.append(f"\n----- {fid} (SOURCE: {rel}) (NOT FOUND on disk) -----")
-+        elif kind == "maven":
-+            snippet = _read_pom_snippet_for_gav(repo_root, rel)
-+            parts.append(
-+                f"\n----- {fid} (MAVEN: {rel}) â€” fix in pom.xml -----\n{snippet}"
-+            )
-+        elif kind == "os":
-+            dockerfile = _read_dockerfile_runtime(repo_root)
-+            if len(dockerfile.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
-+                dockerfile = dockerfile[:_LLM_MAX_FILE_BYTES] + "\n# truncated\n"
-+            parts.append(
-+                f"\n----- {fid} (OS: {rel}) â€” fix in Dockerfile -----\n{dockerfile}"
-+            )
-+        else:
-+            # Unknown / not classifiable â€” still emit a block, just
-+            # without file content. The LLM can try or skip.
-+            parts.append(
-+                f"\n----- {fid} (UNKNOWN: {rel}) â€” no file content; either fix "
-+                f"in pom.xml / Dockerfile based on the suggested_fix, or skip -----"
-+            )
-+
-+    # Also attach the full pom.xml and Dockerfile at the end as a
-+    # "context" so the LLM can emit either file as the patch target
-+    # even if it wasn't the one we quoted in the per-finding block.
-+    parts.append("\n===== PROJECT CONTEXT (use these as patch targets) =====")
-+    pom = repo_root / "pom.xml"
-+    if pom.exists():
-         try:
--            content = path.read_text(encoding="utf-8", errors="replace")
--        except OSError as exc:
--            parts.append(f"\n----- {rel} (READ ERROR: {exc}) -----")
--            continue
-+            content = pom.read_text(encoding="utf-8", errors="replace")
-+        except OSError:
-+            content = ""
-         if len(content.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
-             content = content[:_LLM_MAX_FILE_BYTES] + "\n<!-- truncated -->\n"
--        parts.append(f"\n----- {rel} -----\n{content}")
-+        parts.append(f"\n----- pom.xml -----\n{content}")
-+    df = repo_root / "Dockerfile"
-+    if df.exists():
-+        try:
-+            content = df.read_text(encoding="utf-8", errors="replace")
-+        except OSError:
-+            content = ""
-+        if len(content.encode("utf-8")) > _LLM_MAX_FILE_BYTES:
-+            content = content[:_LLM_MAX_FILE_BYTES] + "\n# truncated\n"
-+        parts.append(f"\n----- Dockerfile -----\n{content}")
- 
-     parts.append(
-         "\nReturn ONLY the JSON object. No commentary, no markdown fences."
-@@ -1201,6 +1558,7 @@ def main() -> int:
-     all_fixes += fix_sql_concat(args.repo_root)
-     all_fixes += fix_plain_password(args.repo_root)
-     all_fixes += fix_bump_dependencies(args.repo_root, trivy_findings)
-+    all_fixes += fix_bump_dockerfile_base(args.repo_root, trivy_findings)
-     all_fixes += fix_add_csp(args.repo_root)
- 
-     # LLM patch pass: ask the model for additional per-file patches and

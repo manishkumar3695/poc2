@@ -2,7 +2,7 @@
 
 - **Status:** NO_CHANGES
 - **Safe fixes applied:** 0 (deterministic: 0, LLM: 0)
-- **Files changed:** 2
+- **Files changed:** 7
 
 ## Fixed (deterministic)
 
@@ -12,9 +12,14 @@
 ## Diff stat
 
 ```
-scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 54534 -> 72622 bytes
- scripts/ai-remediation.py                          | 478 ++++++++++++++++++---
- 2 files changed, 418 insertions(+), 60 deletions(-)
+reports-test/ai-patch.diff                         | 588 ---------------------
+ reports-test/changed-files.txt                     |   2 -
+ reports-test/git-diff-stat.txt                     |   3 -
+ reports-test/remediation-summary.md                |  26 -
+ scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 72622 -> 74790 bytes
+ .../generate-sonar-report.cpython-312.pyc          | Bin 33749 -> 0 bytes
+ scripts/ai-remediation.py                          | 107 +++-
+ 7 files changed, 96 insertions(+), 630 deletions(-)
 ```
 
 ## Reviewer checklist
