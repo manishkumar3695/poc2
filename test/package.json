@@ -1,0 +1,27 @@
+{
+  "name": "vulnerable-springboot-app-security-bdd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright + Cucumber (JS/TS) BDD security test suite for the OWASP Top 10 learning lab.",
+  "type": "commonjs",
+  "scripts": {
+    "test": "cucumber-js",
+    "test:smoke": "cucumber-js --dry-run",
+    "test:report": "node scripts/generate-html-report.js",
+    "tsc:check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cucumber/cucumber": "^11.0.1",
+    "@playwright/test": "^1.47.2",
+    "cucumber-html-reporter": "^7.2.0",
+    "playwright": "^1.47.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

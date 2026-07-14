@@ -1,0 +1,12 @@
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+dist/
+*.log
+
+# Reports: keep directory but ignore generated artefacts
+reports/*
+!reports/.gitkeep
+!reports/playwright-html/

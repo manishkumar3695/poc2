@@ -1,0 +1,216 @@
+{
+  "report_source": "SECURITY_ASSESSMENT_REPORT.md",
+  "generated_date": "2026-07-12",
+  "total_vulnerabilities": 3,
+  "total_testcases": 3,
+  "selection_rationale": "Top 3 Critical findings with the cleanest API test surface. VULN-001 (unsafe Java deserialization on /api/deserialize) is the textbook RCE and the cleanest single-body API test. VULN-002 (SQLi in /api/login) is the textbook auth-bypass and a single JSON POST. VULN-003 (SQLi in /api/search) is the textbook mass-disclosure via a query parameter. All three are Critical per the report's risk matrix. This run is API-ONLY by explicit request, so no UI cases are emitted even where a browser surface exists; the previous split run (security_testcases_3vulns_2026-07-12_split.json) already covered the UI side for VULN-002/007/008.",
+  "testcases": [
+    {
+      "testcase_id": "SEC-001-API",
+      "vuln_ref": "VULN-001",
+      "surface": "api",
+      "title": "Unsafe Java deserialization in /api/deserialize rejects base64 gadget payloads (readObject removed)",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-502",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "POST /api/deserialize (InsecureDeserializationController.deserialize)"
+      },
+      "classification_rationale": "API-only run by explicit request. VULN-001 is intrinsically an API vulnerability (no rendered HTML surface); even if a UI case were emitted it would just be the same HTTP call, so a UI case would be redundant. Emitting only the API case is correct.",
+      "owasp_category": "A08:2021 - Software and Data Integrity Failures",
+      "description": "The legacy controller called ObjectInputStream.readObject() on attacker-controlled base64-decoded bytes, enabling ysoserial gadget-chain RCE (CommonsCollections6, Spring1, etc.) because Spring Boot 3.2.5 transitively pulls in vulnerable gadget classes. Post-remediation, the endpoint is restricted to MediaType.APPLICATION_JSON_VALUE and parses the body as a Map<String,Object> via Jackson. This test verifies (a) the original gadget payload is NOT executed, (b) the endpoint does not echo a Java class name that would only come from readObject, and (c) the new JSON flow still works as the positive control.",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "Endpoint accepts only application/json; sending text/plain should fail at content negotiation"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "curl",
+          "action": "Submit the legacy base64-encoded ysoserial-style payload (text/plain Content-Type) to confirm the endpoint no longer accepts the original readObject surface.",
+          "input_data": "PAYLOAD_B64=$(printf 'aced0005' | xxd -r -p | base64); curl -sS -i -X POST http://localhost:8080/api/deserialize -H 'Content-Type: text/plain' --data-binary \"$PAYLOAD_B64\"",
+          "expected_result": "HTTP 415 Unsupported Media Type (the controller no longer consumes text/plain). No Java class name is echoed in the body, no ClassNotFoundException, no gadget execution."
+        },
+        {
+          "step_number": 2,
+          "tool": "curl",
+          "action": "Submit the same base64 garbage but with Content-Type: application/json to confirm the JSON parser treats the body as opaque and never reaches an ObjectInputStream.",
+          "input_data": "PAYLOAD_B64=$(printf 'aced0005' | xxd -r -p | base64); curl -sS -i -X POST http://localhost:8080/api/deserialize -H 'Content-Type: application/json' --data-binary \"$PAYLOAD_B64\"",
+          "expected_result": "HTTP 400 Bad Request (Jackson cannot parse the base64 blob as JSON). The response body is a Jackson-style parse error. No Java class name in the response, no class-loading side effect."
+        },
+        {
+          "step_number": 3,
+          "tool": "curl",
+          "action": "Submit a malicious-looking JSON object whose @type / class field historically would have triggered polymorphic deserialization. The Jackson default-typing global config is fail-on-unknown-properties, so undeclared fields are rejected.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/deserialize -H 'Content-Type: application/json' -d '{\"@type\":\"java.lang.Runtime\",\"cmd\":\"calc.exe\",\"safe\":\"canary\"}'",
+          "expected_result": "HTTP 400 Bad Request (unknown property '@type' or 'cmd' rejected). No Runtime.getRuntime() invocation; no calc.exe / process spawn. The 'safe' canary is irrelevant because the request is rejected outright."
+        },
+        {
+          "step_number": 4,
+          "tool": "curl",
+          "action": "Positive control: submit a well-formed benign JSON object and confirm the new JSON flow round-trips.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/deserialize -H 'Content-Type: application/json' -d '{\"safe\":\"canary\",\"number\":42,\"nested\":{\"k\":\"v\"}}'",
+          "expected_result": "HTTP 200 with body {\"type\":\"Map<String,Object>\",\"size\":3} (or equivalent JSON shape: a type marker and a size). No 4xx, no 5xx, no class name."
+        }
+      ],
+      "expected_result": "Every malicious or malformed payload is rejected (415 or 400) and no Java class name is ever echoed. The benign JSON control returns 200 with a type-and-size acknowledgement.",
+      "evidence": {
+        "http_status_gadget_text_plain": 415,
+        "http_status_gadget_as_json": 400,
+        "http_status_malicious_json": 400,
+        "http_status_positive_control": 200,
+        "no_java_class_name_in_body": true,
+        "no_process_spawned": true
+      },
+      "pass_criteria": "All three negative payloads are rejected at the HTTP layer (415/400). The positive JSON control returns 200 with a non-empty Map. The body never contains a Java class name string.",
+      "fail_criteria": "Any payload returns 200 with a Java class name, OR the server executes a side effect (process spawn, file write), OR a stack trace leaks a gadget class name, OR the positive control regresses to 4xx/5xx.",
+      "remediation_reference": "The readObject sink is removed. The controller now consumes application/json and uses ObjectMapper.readValue(body, Map.class). Confirm fail-on-unknown-properties is enabled globally so undeclared fields are rejected.",
+      "priority": "P0",
+      "tags": ["security", "deserialization", "rce", "a08", "api-only"]
+    },
+    {
+      "testcase_id": "SEC-002-API",
+      "vuln_ref": "VULN-002",
+      "surface": "api",
+      "title": "SQL injection in /api/login does not bypass authentication (parameterised query + BCrypt)",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-89",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "POST /api/login (UserService.loginUnsafe)"
+      },
+      "classification_rationale": "API-only run by explicit request. VULN-002 has a real browser surface (/login Thymeleaf form posts to /api/login), but the previous split run already covered the UI side as SEC-002-UI. This run emits only the API case to verify the fix holds at the JSON contract layer.",
+      "owasp_category": "A03:2021 - Injection",
+      "description": "loginUnsafe historically concatenated username and password into a native SQL string passed to EntityManager.createNativeQuery(...). The tautology ' OR '1'='1 short-circuited the WHERE clause and returned the first user row. Post-remediation, the query is parameterised (:username) and the password is compared against a BCrypt hash via PasswordEncoder.matches(). This test verifies (a) the SQLi tautology is rejected with 401, (b) a UNION-based probe leaks no SQL error, and (c) a valid seeded credential still authenticates.",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "Seeded users exist (alice/alice123, admin/admin123) with BCrypt-hashed passwords"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "curl",
+          "action": "Positive control: log in as alice with the correct seeded password to prove the endpoint is reachable and the BCrypt path works.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' -d '{\"username\":\"alice\",\"password\":\"alice123\"}'",
+          "expected_result": "HTTP 200 with JSON body containing alice's id, username, and role. The 'password' field is absent (VULN-009 also remediated)."
+        },
+        {
+          "step_number": 2,
+          "tool": "curl",
+          "action": "Submit a SQLi tautology as the username to confirm the parameterised query treats it as a literal value.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' --data-raw '{\"username\":\"' OR '1'='1\",\"password\":\"anything\"}'",
+          "expected_result": "HTTP 401 with body {\"error\":\"Invalid credentials\"} (or equivalent). No user row echoed. No 200."
+        },
+        {
+          "step_number": 3,
+          "tool": "curl",
+          "action": "Submit a UNION-based probe to check for SQL error leakage or column-count leak.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' --data-raw '{\"username\":\"' UNION SELECT 1,2,3,4,5 FROM users--\",\"password\":\"x\"}'",
+          "expected_result": "HTTP 401, no Hibernate/SQL/ORA error string in the response body, no column-count leak in the body, no user row."
+        },
+        {
+          "step_number": 4,
+          "tool": "curl",
+          "action": "Submit a SQLi payload in the PASSWORD field (different vector on the same fix).",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' --data-raw '{\"username\":\"alice\",\"password\":\"' OR '1'='1\"}'",
+          "expected_result": "HTTP 401. The hash compare is constant-time; the literal SQL string never reaches a query."
+        },
+        {
+          "step_number": 5,
+          "tool": "curl",
+          "action": "Positive control: log in as admin to confirm the fix did not break the seeded credentials path or the password-hash check.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}'",
+          "expected_result": "HTTP 200 with admin role echoed in the JSON body."
+        }
+      ],
+      "expected_result": "All SQLi payloads (tautology, UNION, password-field) receive 401. The two positive controls (alice/alice123 and admin/admin123) return 200 with id/username/role. The response body never contains a user row from a SQLi payload, never contains an SQL error, and never contains the password field.",
+      "evidence": {
+        "http_status_sqli_username": 401,
+        "http_status_sqli_password": 401,
+        "http_status_union_probe": 401,
+        "http_status_alice_happy": 200,
+        "http_status_admin_happy": 200,
+        "no_user_row_in_body": true,
+        "no_sql_error_in_body": true,
+        "no_password_field_in_body": true
+      },
+      "pass_criteria": "Every SQLi payload returns 401. Both positive controls return 200. No SQL error string, no user row, and no password field appears in any response body.",
+      "fail_criteria": "Any SQLi payload returns 200 with a populated user body, OR any response body contains a Hibernate/SQL error string, OR the password field appears in a 200 body, OR either positive control regresses to 401.",
+      "remediation_reference": "Replace createNativeQuery concatenation with the parameterised query (':username' + setParameter) and verify the password against a BCrypt hash via PasswordEncoder.matches(). The VULN-009 fix removes the password field from the response body.",
+      "priority": "P0",
+      "tags": ["security", "sqli", "auth-bypass", "a03", "api-only"]
+    },
+    {
+      "testcase_id": "SEC-003-API",
+      "vuln_ref": "VULN-003",
+      "surface": "api",
+      "title": "SQL injection in /api/search does not dump the users table (parameterised query)",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-89",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "GET /api/search?q= (UserService.findByUsernameUnsafe)"
+      },
+      "classification_rationale": "API-only run by explicit request. VULN-003 is intrinsically an API vulnerability (it is exercised purely through the ?q= query parameter on a JSON endpoint); no UI surface exists. Emitting only the API case is correct.",
+      "owasp_category": "A03:2021 - Injection",
+      "description": "findByUsernameUnsafe historically concatenated the q parameter into a native SELECT * FROM users WHERE username = '...' string. A tautology dumped every user row including the password field. Post-remediation, the query is parameterised (':username') so the q value is bound as a literal. This test verifies (a) the tautology returns zero rows (not the full table), (b) a UNION probe leaks no SQL error and returns zero rows, and (c) an exact-match query for an existing username returns that single row (positive control).",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "Seeded users exist (alice, bob, admin)",
+        "Endpoint requires authentication (HTTP Basic with alice/alice123 is acceptable per the SecurityConfig)"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "curl",
+          "action": "Positive control: search for an exact username and confirm the safe path returns exactly one row.",
+          "input_data": "curl -sS -i -u alice:alice123 'http://localhost:8080/api/search?q=alice'",
+          "expected_result": "HTTP 200 with a JSON array of length 1 containing alice. No other users in the array. The 'password' field, if present, is a BCrypt hash (starts with $2a/$2b/$2y) - never the plaintext 'alice123'."
+        },
+        {
+          "step_number": 2,
+          "tool": "curl",
+          "action": "Submit the original mass-disclosure tautology as the q parameter.",
+          "input_data": "curl -sS -i -u alice:alice123 'http://localhost:8080/api/search?q=%27%20OR%20%271%27%3D%271'",
+          "expected_result": "HTTP 200 with a JSON array of length 0. The parameterised query treats the input as a literal username (which is ' OR '1'='1) and finds no row matching that literal. The full user table is NOT dumped."
+        },
+        {
+          "step_number": 3,
+          "tool": "curl",
+          "action": "Submit a UNION-based probe to confirm no SQL error leakage and no column-count leak.",
+          "input_data": "curl -sS -i -u alice:alice123 \"http://localhost:8080/api/search?q=%27%20UNION%20SELECT%201%2C2%2C3%2C4%2C5%20FROM%20users--\"",
+          "expected_result": "HTTP 200 with a JSON array of length 0. No SQL/Hibernate/JPA error string in the body. No column-count leak (the array length is 0, not a multiple of the column count)."
+        },
+        {
+          "step_number": 4,
+          "tool": "curl",
+          "action": "Submit a wildcard-ish payload '%' to confirm the parameter is treated as a literal (no LIKE expansion).",
+          "input_data": "curl -sS -i -u alice:alice123 'http://localhost:8080/api/search?q=%25'",
+          "expected_result": "HTTP 200 with a JSON array of length 0 (the literal username is '%' which matches no user). The endpoint does not perform a LIKE '%' expansion that would dump all rows."
+        },
+        {
+          "step_number": 5,
+          "tool": "curl",
+          "action": "Positive control: search for a different exact username to confirm the safe path works for non-admins too and does not leak any password plaintext.",
+          "input_data": "curl -sS -i -u alice:alice123 'http://localhost:8080/api/search?q=bob'",
+          "expected_result": "HTTP 200 with a JSON array of length 1 containing bob. The 'password' field, if present, is a BCrypt hash - never the plaintext 'bob123'. No other user rows in the array."
+        }
+      ],
+      "expected_result": "Every SQLi payload (tautology, UNION, wildcard) returns a JSON array of length 0. The two positive controls (q=alice, q=bob) each return a JSON array of length 1. No plaintext password ever appears in any response body. No SQL error string ever appears in any response body.",
+      "evidence": {
+        "rows_for_tautology": 0,
+        "rows_for_union_probe": 0,
+        "rows_for_wildcard": 0,
+        "rows_for_alice": 1,
+        "rows_for_bob": 1,
+        "no_plaintext_password_in_body": true,
+        "no_sql_error_in_body": true
+      },
+      "pass_criteria": "All three negative payloads return a JSON array of length 0. Both positive controls return a JSON array of length 1 with the correct user. No plaintext password and no SQL error string appears in any body.",
+      "fail_criteria": "The tautology returns more than 0 rows (mass disclosure), OR any response body contains a plaintext password (alice123/bob123/admin123), OR any response body contains an SQL/Hibernate error string, OR either positive control regresses to length 0 or an error.",
+      "remediation_reference": "Replace the createNativeQuery concatenation in UserService.findByUsernameUnsafe with the parameterised query (':username' + setParameter). VULN-009's fix keeps the password hash out of the response even though findAll/findById return full User entities.",
+      "priority": "P0",
+      "tags": ["security", "sqli", "mass-disclosure", "a03", "api-only"]
+    }
+  ]
+}

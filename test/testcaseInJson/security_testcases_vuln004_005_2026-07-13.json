@@ -1,0 +1,309 @@
+{
+  "report_source": "SECURITY_ASSESSMENT_REPORT.md",
+  "generated_date": "2026-07-13",
+  "total_vulnerabilities": 2,
+  "total_testcases": 4,
+  "selection_rationale": "Two Critical configuration/storage findings with both a real JSON API surface and a real browser-rendered Thymeleaf surface. VULN-004 (plain-text password storage) is the canonical A02:2021 storage-of-secrets finding; the test must verify the BCrypt-hash storage path on /api/register, that /api/login still verifies the new hash, and that no read path (search/profile/users) echoes a plaintext password. VULN-005 (authentication disabled globally via permitAll) is the canonical A01:2021 access-control finding; the test must verify that the content-type-aware entry point challenges anonymous JSON callers with 401 + WWW-Authenticate: Basic while bouncing HTML-preferring browsers to /login, and that the explicitly-public endpoints (/api/login, /api/register, /login) remain reachable without credentials. Per the agent spec, when both surfaces are real for a vuln, both cases are emitted (this run defaults to API+UI, unlike the prior API-only top-3 run).",
+  "testcases": [
+    {
+      "testcase_id": "SEC-004-API",
+      "vuln_ref": "VULN-004",
+      "surface": "api",
+      "title": "Plain-text password storage: /api/register hashes with BCrypt and never echoes plaintext",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-256",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "POST /api/register (AuthController.register + UserService.save), DataSeeder.seed, User.password"
+      },
+      "classification_rationale": "API surface exists: /api/register is a JSON POST, and every read path (/api/users, /api/profile/{id}, /api/search) returns the User entity which now contains the BCrypt-hashed password. A UI case is also emitted (SEC-004-UI) because the Thymeleaf /register and /login forms are a real browser surface for the same storage path.",
+      "owasp_category": "A02:2021 - Cryptographic Failures",
+      "description": "Pre-remediation, AuthController.register stored the body.getOrDefault('password', '') value verbatim into the User.password column, and DataSeeder persisted 'alice123'/'bob123'/'admin123' as plaintext. Post-remediation, a PasswordEncoder bean (delegating, BCrypt-default) is injected; UserService.save hashes the password via passwordEncoder.encode(...) before persisting; the response body is built from a DTO that omits the password. This test verifies (a) /api/register accepts a plaintext password but stores a BCrypt hash, (b) the response body does NOT echo the plaintext or the hash, (c) the new user can authenticate via /api/login with the original plaintext (proving BCrypt verify), and (d) a read path (e.g. /api/users as admin) shows the hash and never the plaintext.",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "Seeded users exist (alice/alice123, bob/bob123, admin/admin123) with BCrypt-hashed passwords",
+        "A unique canary username is used per run (e.g. cipher_test_<timestamp>) to avoid colliding with prior test data"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "curl",
+          "action": "Positive control: register a fresh user with a plaintext password and confirm the endpoint accepts the request and returns a body that does NOT contain the plaintext or the hash.",
+          "input_data": "CANARY=\"cipher_test_$(date +%s)\"; curl -sS -i -X POST http://localhost:8080/api/register -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"$CANARY\\\",\\\"password\\\":\\\"Sup3rSafe!Passw0rd\\\",\\\"email\\\":\\\"$CANARY@example.com\\\"}\"",
+          "expected_result": "HTTP 200 with a JSON body containing at least the new user's id, username, and (typically) email. The body MUST NOT contain the literal plaintext 'Sup3rSafe!Passw0rd' and MUST NOT contain a string matching the BCrypt pattern /^\\$2[aby]\\$\\d{2}\\$.{53}/ (i.e. no hash leak)."
+        },
+        {
+          "step_number": 2,
+          "tool": "curl",
+          "action": "Verify the just-registered user can authenticate via /api/login with the original plaintext password (proves BCrypt verify, not plaintext compare).",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"$CANARY\\\",\\\"password\\\":\\\"Sup3rSafe!Passw0rd\\\"}\"",
+          "expected_result": "HTTP 200 with JSON body containing the canary user's id and role. The 'password' field is absent (VULN-009 also remediated). HTTP 401 is a fail — would mean the hash was not compared correctly."
+        },
+        {
+          "step_number": 3,
+          "tool": "curl",
+          "action": "Negative control: attempt login with a wrong password against the just-registered user. BCrypt verify must reject it.",
+          "input_data": "curl -sS -i -X POST http://localhost:8080/api/login -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"$CANARY\\\",\\\"password\\\":\\\"wrong-password\\\"}\"",
+          "expected_result": "HTTP 401 (or 400). No user body. The hash compare is constant-time and must not leak via timing side-channel observable in the status code (any 401 response is fine; 200 is a fail)."
+        },
+        {
+          "step_number": 4,
+          "tool": "curl",
+          "action": "Read the canary user via /api/profile/{id} (findByIdUnsafe) and verify the password field, if present, is a BCrypt hash and never the plaintext.",
+          "input_data": "curl -sS -i -u admin:admin123 http://localhost:8080/api/profile/<id-from-step-1>",
+          "expected_result": "HTTP 200. The body either (a) omits the 'password' field, or (b) contains a 'password' value matching the BCrypt pattern /^(\\{bcrypt\\})?\\$2[aby]\\$\\d{2}\\$.{53}/. The literal 'Sup3rSafe!Passw0rd' MUST NOT appear anywhere in the response body."
+        },
+        {
+          "step_number": 5,
+          "tool": "curl",
+          "action": "Read all users via /api/users as admin and verify NO row in the array contains a plaintext seeded password (alice123 / bob123 / admin123) nor the canary plaintext.",
+          "input_data": "curl -sS -i -u admin:admin123 http://localhost:8080/api/users",
+          "expected_result": "HTTP 200 with a JSON array. For every element, either 'password' is absent or its value matches the BCrypt pattern. The substrings 'alice123', 'bob123', 'admin123', and the canary 'Sup3rSafe!Passw0rd' MUST NOT appear anywhere in the body."
+        }
+      ],
+      "expected_result": "Register accepts a plaintext password and stores a BCrypt hash (or {bcrypt}-prefixed hash). The register/login/users/profile response bodies never echo the plaintext or the hash. Login with the original plaintext succeeds (BCrypt verify). Login with a wrong password fails with 401. No response body in this test ever contains a seeded plaintext ('alice123'/'bob123'/'admin123') or the canary plaintext.",
+      "evidence": {
+        "register_http_status": 200,
+        "register_body_has_plaintext": false,
+        "register_body_has_bcrypt_hash": false,
+        "login_with_plaintext_http_status": 200,
+        "login_with_wrong_password_http_status": 401,
+        "profile_password_field_is_bcrypt_or_absent": true,
+        "users_array_no_plaintext_seed": true,
+        "bcrypt_pattern": "^(\\{bcrypt\\})?\\$2[aby]\\$\\d{2}\\$.{53}"
+      },
+      "pass_criteria": "All 5 steps return the expected status. No response body contains the plaintext passwords 'alice123'/'bob123'/'admin123'/'Sup3rSafe!Passw0rd'. Any 'password' field that does appear matches the BCrypt pattern (with or without the {bcrypt} prefix from the delegating encoder). Login with the original plaintext succeeds; login with a wrong password fails.",
+      "fail_criteria": "Any response body contains a plaintext password (plaintext leak in API response), OR login with the original plaintext returns 401 (hash not compared correctly), OR login with a wrong password returns 200 (compare not actually performed), OR the /api/users array contains a row whose 'password' is exactly 'alice123' / 'bob123' / 'admin123' (VULN-004 regression).",
+      "remediation_reference": "Inject the PasswordEncoder bean (delegating, BCrypt-default) into AuthController and UserService; call passwordEncoder.encode(rawPassword) before UserService.save. Build the response from a DTO that omits 'password'. Update DataSeeder to encode the seeded plaintexts at startup. The /api/users and /api/profile/{id} response may still serialize the password hash via Jackson; that is acceptable per the BCrypt pattern assertion, but ideally the response DTO omits 'password' entirely.",
+      "priority": "P0",
+      "tags": ["security", "password-storage", "bcrypt", "a02", "api"]
+    },
+    {
+      "testcase_id": "SEC-004-UI",
+      "vuln_ref": "VULN-004",
+      "surface": "ui",
+      "title": "Plain-text password storage: Thymeleaf /register and /login forms store and verify BCrypt-hashed passwords",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-256",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "GET /register, POST /register (Thymeleaf form -> AuthController.register); GET /login, POST /login (Thymeleaf form)"
+      },
+      "classification_rationale": "UI surface exists: the rendered Thymeleaf /register and /login forms are a real browser-driven path into the same storage code that SEC-004-API covers. A real attacker can drive a browser to register and then log in. Emitted in addition to SEC-004-API to verify the fix on the browser surface (including any CSRF/session behaviour on the form).",
+      "owasp_category": "A02:2021 - Cryptographic Failures",
+      "description": "Same storage code as SEC-004-API, exercised through the rendered Thymeleaf /register and /login forms. This confirms the fix holds end-to-end via a real browser: typing a plaintext password into /register results in a persisted BCrypt hash; submitting that same plaintext to /login succeeds (BCrypt verify). The test also verifies that the registration response page (or the post-login dashboard) does not render the plaintext password back into the DOM.",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "A unique canary username is used per run (e.g. ui_cipher_<timestamp>) so a repeated run does not collide"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "mcp__playwright__browser_navigate",
+          "action": "Open the registration page in a real browser and confirm a Thymeleaf form with username, password, and email inputs is rendered.",
+          "input_data": "url: http://localhost:8080/register",
+          "expected_result": "HTTP 200; the rendered DOM contains a <form> with input fields whose names include 'username', 'password', and 'email' (and a hidden _csrf field if CSRF is enforced on this surface)."
+        },
+        {
+          "step_number": 2,
+          "tool": "mcp__playwright__browser_fill_form",
+          "action": "Submit a canary plaintext password through the registration form.",
+          "input_data": "fields: { username: 'ui_cipher_<timestamp>', password: 'Sup3rSafe!Passw0rd', email: 'ui_cipher_<timestamp>@example.com' }",
+          "expected_result": "The form posts to /register; the server returns 200 (or a redirect to /login / /dashboard). The rendered page (response body) MUST NOT contain the literal 'Sup3rSafe!Passw0rd' as visible text and MUST NOT contain a BCrypt hash string. Either a generic 'Registration successful' message, a redirect, or an empty form is acceptable."
+        },
+        {
+          "step_number": 3,
+          "tool": "mcp__playwright__browser_navigate",
+          "action": "Open the login page in a fresh browser context (no shared cookies with step 2).",
+          "input_data": "url: http://localhost:8080/logout (if available) then http://localhost:8080/login; otherwise open a new tab and navigate to http://localhost:8080/login",
+          "expected_result": "HTTP 200; Thymeleaf form with username/password inputs (and a hidden _csrf field) is rendered."
+        },
+        {
+          "step_number": 4,
+          "tool": "mcp__playwright__browser_fill_form",
+          "action": "Submit the same canary plaintext via the login form to verify BCrypt verify works through the browser flow.",
+          "input_data": "fields: { username: 'ui_cipher_<timestamp>', password: 'Sup3rSafe!Passw0rd' }",
+          "expected_result": "Form posts to /login; the browser lands on /dashboard (or /) with a session cookie set. The response does not render the plaintext password back into the DOM. A landing on /login with an error message would mean the hash was not compared correctly."
+        },
+        {
+          "step_number": 5,
+          "tool": "mcp__playwright__browser_evaluate",
+          "action": "Inspect the DOM of the current page for any plaintext password leak, and confirm the session is established.",
+          "input_data": "() => ({ url: window.location.pathname, bodyHasPlaintext: document.body.innerText.includes('Sup3rSafe!Passw0rd'), hasDashboardHeading: !!document.querySelector('h1')?.textContent?.match(/dashboard/i) || /dashboard/i.test(document.body.innerText) })",
+          "expected_result": "{ url: '/dashboard' (or '/'), bodyHasPlaintext: false, hasDashboardHeading: true }"
+        }
+      ],
+      "expected_result": "The /register Thymeleaf form accepts the canary plaintext and persists a BCrypt hash. The /login Thymeleaf form authenticates the same plaintext via BCrypt verify and lands the browser on /dashboard. No page in this flow ever renders the plaintext password back into the DOM.",
+      "evidence": {
+        "register_url": "/register",
+        "register_response_body_has_plaintext": false,
+        "register_response_body_has_bcrypt_hash": false,
+        "post_login_url": "/dashboard",
+        "post_login_body_has_plaintext": false,
+        "dashboard_heading_present": true
+      },
+      "pass_criteria": "Step 2 returns a 200/redirect whose rendered body does not contain the plaintext or a BCrypt hash. Step 4 lands the browser on /dashboard. Step 5 confirms the URL is /dashboard (or /) and document.body.innerText does not include the plaintext.",
+      "fail_criteria": "Step 2's response body contains the plaintext or a BCrypt hash (storage/remediation regression exposed via UI), OR step 4 leaves the browser on /login (BCrypt verify broken), OR step 5's document.body.innerText contains the plaintext (rendered into the page).",
+      "remediation_reference": "Same as SEC-004-API: PasswordEncoder bean injected; UserService.save hashes before persist; registration/login responses do not include the password field. The Thymeleaf templates must use th:text (HTML-escaped) for any value that could ever reflect the password, or simply not render it.",
+      "priority": "P0",
+      "tags": ["security", "password-storage", "bcrypt", "a02", "thymeleaf", "playwright"]
+    },
+    {
+      "testcase_id": "SEC-005-API",
+      "vuln_ref": "VULN-005",
+      "surface": "api",
+      "title": "Authentication enforced globally: anonymous JSON callers get 401 + WWW-Authenticate: Basic; authenticated callers get 200",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-284",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "SecurityConfig.filterChain (formerly insecureFilterChain); applies to /api/users, /api/transfer, /api/profile/{id}, /api/search, /api/products, /api/deserialize and any other non-public path"
+      },
+      "classification_rationale": "API surface exists: VULN-005 is a global filter-chain policy. The content-type-aware entry point dispatches JSON callers to a 401 + WWW-Authenticate: Basic challenge and HTML callers to a /login redirect. A UI case is also emitted (SEC-005-UI) to exercise the browser-side redirect. Per CLAUDE.md, the explicitly-public list is /api/login, /api/register, /h2-console/**, /login, /logout, /css/**, /js/**, /error, /, /dashboard.",
+      "owasp_category": "A01:2021 - Broken Access Control",
+      "description": "Pre-remediation, SecurityConfig.insecureFilterChain called authorizeHttpRequests(auth -> auth.anyRequest().permitAll()), so every endpoint — including /api/users, /api/transfer, /api/deserialize — was reachable without credentials. Post-remediation, the filter chain is split: a public chain permits /api/login, /api/register, /h2-console/**, /login, /logout, /css/**, /js/**, /error, /, /dashboard; everything else requires authentication. The content-type-aware entry point returns 401 + WWW-Authenticate: Basic for callers with Accept: application/json and 302 -> /login for HTML-preferring callers. This test verifies the four behavioural contracts: (1) anonymous JSON caller to a protected endpoint gets 401 + the Basic challenge header, (2) anonymous caller to the public /api/login gets 200 on valid creds and 401 on bad creds (the endpoint is public, the credentials gate access), (3) anonymous caller to the public /api/register succeeds, and (4) authenticated caller to a protected endpoint gets 200.",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "Seeded users exist (alice/alice123, admin/admin123)",
+        "HTTP Basic header is built as Authorization: Basic <base64(username:password)>; a safe construction is curl -u alice:alice123"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "curl",
+          "action": "Anonymous JSON request to a protected endpoint; expect 401 + WWW-Authenticate: Basic from the content-type-aware entry point.",
+          "input_data": "curl -sS -i -H 'Accept: application/json' http://localhost:8080/api/users",
+          "expected_result": "HTTP 401. Response headers include 'WWW-Authenticate: Basic' (case-insensitive). Body is a JSON error envelope (e.g. {\"error\":\"Unauthorized\"} or empty). NOT a 200 with user data (which would mean permitAll() is back)."
+        },
+        {
+          "step_number": 2,
+          "tool": "curl",
+          "action": "Repeat the anonymous probe against another protected endpoint to confirm the policy is global, not per-route.",
+          "input_data": "curl -sS -i -H 'Accept: application/json' http://localhost:8080/api/profile/1",
+          "expected_result": "HTTP 401 with the WWW-Authenticate: Basic header. No user row leaked in the body."
+        },
+        {
+          "step_number": 3,
+          "tool": "curl",
+          "action": "Anonymous request to the public /api/login with valid credentials; expect 200 (the endpoint is public, the credentials gate access).",
+          "input_data": "curl -sS -i -H 'Accept: application/json' -X POST -H 'Content-Type: application/json' -d '{\"username\":\"alice\",\"password\":\"alice123\"}' http://localhost:8080/api/login",
+          "expected_result": "HTTP 200 with JSON body containing alice's id, username, role. No 'password' field (VULN-009 fix). NOT a 401 (which would mean the auth filter is now blocking the public endpoint)."
+        },
+        {
+          "step_number": 4,
+          "tool": "curl",
+          "action": "Anonymous request to the public /api/login with bad credentials; expect 401 (gated by credentials, not by the filter chain).",
+          "input_data": "curl -sS -i -H 'Accept: application/json' -X POST -H 'Content-Type: application/json' -d '{\"username\":\"alice\",\"password\":\"wrong\"}' http://localhost:8080/api/login",
+          "expected_result": "HTTP 401 with the WWW-Authenticate: Basic header (the same entry-point contract applies). No user body."
+        },
+        {
+          "step_number": 5,
+          "tool": "curl",
+          "action": "Anonymous request to the public /api/register; expect 200 (the endpoint is in the public list, anyone can register).",
+          "input_data": "CANARY=\"open_reg_$(date +%s)\"; curl -sS -i -H 'Accept: application/json' -X POST -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"$CANARY\\\",\\\"password\\\":\\\"An0therSafe!Pass\\\",\\\"email\\\":\\\"$CANARY@example.com\\\"}\" http://localhost:8080/api/register",
+          "expected_result": "HTTP 200 with a JSON body containing the new user's id/username/email. The plaintext password is not echoed (VULN-004 fix). 401 is a fail — would mean the public list is over-restricted."
+        },
+        {
+          "step_number": 6,
+          "tool": "curl",
+          "action": "Authenticated request to a protected endpoint with HTTP Basic; expect 200 and the expected data.",
+          "input_data": "curl -sS -i -u alice:alice123 -H 'Accept: application/json' http://localhost:8080/api/users",
+          "expected_result": "HTTP 200 with a JSON array containing the seeded users. The 'password' field, if present, is a BCrypt hash (VULN-004 fix); no plaintext 'alice123'/'bob123'/'admin123' is in the body. NOT a 401 (which would mean authentication is broken)."
+        },
+        {
+          "step_number": 7,
+          "tool": "curl",
+          "action": "Authenticated admin request to a state-changing endpoint that requires an authenticated principal; expect 200 (positive control for the auth filter).",
+          "input_data": "curl -sS -i -u admin:admin123 -H 'Accept: application/json' http://localhost:8080/api/profile/1",
+          "expected_result": "HTTP 200 with a JSON body for alice (id=1). The 'password' field, if present, is a BCrypt hash."
+        }
+      ],
+      "expected_result": "Anonymous JSON calls to protected endpoints (steps 1 and 2) return 401 with WWW-Authenticate: Basic. Public endpoints (/api/login valid creds, /api/register, and /api/login with bad creds) return the credential-gated status (200/200/401). Authenticated calls to protected endpoints (steps 6 and 7) return 200. No 200 ever leaks from a protected endpoint to an anonymous caller.",
+      "evidence": {
+        "anonymous_users_http_status": 401,
+        "anonymous_users_has_www_authenticate_basic": true,
+        "anonymous_profile_http_status": 401,
+        "public_login_valid_creds_http_status": 200,
+        "public_login_bad_creds_http_status": 401,
+        "public_register_http_status": 200,
+        "authenticated_users_http_status": 200,
+        "authenticated_profile_http_status": 200
+      },
+      "pass_criteria": "Steps 1 and 2 return 401 with the WWW-Authenticate: Basic header. Step 3 returns 200. Step 4 returns 401. Step 5 returns 200. Steps 6 and 7 return 200. No protected endpoint ever returns 200 to an anonymous caller.",
+      "fail_criteria": "Any anonymous request to a protected endpoint returns 200 (VULN-005 regression — permitAll() is back), OR the WWW-Authenticate: Basic header is missing on a 401 (entry-point contract broken), OR /api/login or /api/register return 401 to valid anonymous calls (public list over-restricted), OR authenticated calls return 401 (auth filter misconfigured).",
+      "remediation_reference": "Replace the single insecureFilterChain with two chains: an @Order(1) public chain (permitAll on /api/login, /api/register, /h2-console/**, /login, /logout, /css/**, /js/**, /error, /, /dashboard) and an @Order(2) chain that requires authentication for everything else. Wire the content-type-aware entry point that returns 401 + WWW-Authenticate: Basic for Accept: application/json callers and redirects to /login for HTML-preferring callers.",
+      "priority": "P0",
+      "tags": ["security", "access-control", "auth-enforcement", "a01", "api"]
+    },
+    {
+      "testcase_id": "SEC-005-UI",
+      "vuln_ref": "VULN-005",
+      "surface": "ui",
+      "title": "Authentication enforced globally: anonymous browser is redirected to /login when accessing a protected page",
+      "vulnerability_reference": {
+        "cwe_id": "CWE-284",
+        "cve_id": null,
+        "severity": "Critical",
+        "affected_component": "SecurityConfig.filterChain + contentTypeAwareEntryPoint; browser-side flow on /users, /dashboard, /comments, /transfer, /products"
+      },
+      "classification_rationale": "UI surface exists: the content-type-aware entry point redirects HTML-preferring callers (browsers) to /login when they hit a protected page. A real attacker driving a browser must be bounced to /login before they can see /users, /dashboard, etc. Emitted in addition to SEC-005-API to cover the browser-side redirect contract.",
+      "owasp_category": "A01:2021 - Broken Access Control",
+      "description": "Pre-remediation, every endpoint was permitAll(), so an anonymous browser could navigate to /users, /dashboard, /transfer and see the rendered data. Post-remediation, the content-type-aware entry point detects the browser's Accept: text/html header and issues a 302 redirect to /login for any protected path; the public paths (/login, /register, /, /dashboard) remain reachable. This test verifies the redirect contract from a real browser, then logs in via the form and confirms the protected page is now reachable.",
+      "preconditions": [
+        "Application is running and reachable on http://localhost:8080",
+        "Seeded users exist (alice/alice123, admin/admin123)",
+        "Use a fresh browser context (no cached session cookie) so the redirect is observable"
+      ],
+      "steps": [
+        {
+          "step_number": 1,
+          "tool": "mcp__playwright__browser_navigate",
+          "action": "Anonymous browser request to a protected server-rendered page; expect a redirect to /login (302 -> /login in the network log, and the rendered DOM ends up on /login).",
+          "input_data": "url: http://localhost:8080/users",
+          "expected_result": "The browser ends up on /login (window.location.pathname === '/login'). The login form (username/password inputs, hidden _csrf) is visible. The /users page content is NOT rendered to the anonymous caller."
+        },
+        {
+          "step_number": 2,
+          "tool": "mcp__playwright__browser_navigate",
+          "action": "Anonymous browser request to a different protected page to confirm the policy is global on the UI surface as well.",
+          "input_data": "url: http://localhost:8080/transfer",
+          "expected_result": "The browser ends up on /login. The transfer form is NOT rendered to the anonymous caller."
+        },
+        {
+          "step_number": 3,
+          "tool": "mcp__playwright__browser_navigate",
+          "action": "Anonymous browser request to the public /login endpoint to confirm the public list is honoured on the UI surface (this endpoint should NOT redirect).",
+          "input_data": "url: http://localhost:8080/login",
+          "expected_result": "HTTP 200 (no redirect). The login form is rendered. window.location.pathname stays at '/login'."
+        },
+        {
+          "step_number": 4,
+          "tool": "mcp__playwright__browser_fill_form",
+          "action": "Log in via the Thymeleaf login form with the seeded credentials and confirm the protected /users page is now reachable.",
+          "input_data": "fields: { username: 'alice', password: 'alice123' } (and submit, then navigate to /users)",
+          "expected_result": "Browser lands on /dashboard after login, then on /users after the follow-up navigate. The /users page is rendered (e.g. a table/list of users is visible). The 'password' field, if present in any rendered cell, is a BCrypt hash and never the plaintext 'alice123' (VULN-004 fix). No plaintext 'bob123' / 'admin123' anywhere in the rendered DOM."
+        },
+        {
+          "step_number": 5,
+          "tool": "mcp__playwright__browser_evaluate",
+          "action": "Confirm the browser is on /users and that the rendered DOM does not contain any plaintext seeded password.",
+          "input_data": "() => ({ url: window.location.pathname, bodyHasAlice123: document.body.innerText.includes('alice123'), bodyHasBob123: document.body.innerText.includes('bob123'), bodyHasAdmin123: document.body.innerText.includes('admin123') })",
+          "expected_result": "{ url: '/users', bodyHasAlice123: false, bodyHasBob123: false, bodyHasAdmin123: false }"
+        }
+      ],
+      "expected_result": "Anonymous browser navigation to a protected page (/users, /transfer) ends up on /login (302 + form render). Anonymous browser navigation to /login stays on /login with the form. After authenticating via the form, the browser reaches /users and the user list is rendered. The rendered DOM never contains a plaintext seeded password.",
+      "evidence": {
+        "anonymous_users_final_url": "/login",
+        "anonymous_transfer_final_url": "/login",
+        "anonymous_login_final_url": "/login",
+        "post_login_users_url": "/users",
+        "post_login_dom_has_plaintext": false
+      },
+      "pass_criteria": "Steps 1 and 2 end on /login. Step 3 stays on /login. Step 4 lands on /dashboard and then /users with the list rendered. Step 5 confirms the rendered DOM has no plaintext 'alice123' / 'bob123' / 'admin123'.",
+      "fail_criteria": "An anonymous browser can see the /users or /transfer page content (VULN-005 regression — permitAll() is back on the UI surface), OR /login itself redirects away from /login (public list broken), OR the post-login /users page renders a plaintext password (compound regression of VULN-004 and VULN-009).",
+      "remediation_reference": "Same as SEC-005-API. Confirm the content-type-aware entry point's HTML branch (redirect to /login) is wired for every protected path. Confirm the public chain includes /login, /register, /, /dashboard so they stay reachable.",
+      "priority": "P0",
+      "tags": ["security", "access-control", "auth-enforcement", "a01", "thymeleaf", "playwright"]
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+- [vulnerable-springboot-app-surface](vulnerable-springboot-app-surface.md) — non-obvious OWASP-lab surface details (no /register Thymeleaf page; /login renders plaintext creds; /api/register serialises the BCrypt hash; 401 from /api/login bad-creds has no WWW-Authenticate; /api/users is admin-only)
+- [security-vuln-automation-stack](security-vuln-automation-stack.md) — Playwright + Cucumber (JS/TS) stack under test/, World shape, common step patterns, validation rules

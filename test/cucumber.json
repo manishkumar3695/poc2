@@ -1,0 +1,24 @@
+{
+  "default": {
+    "paths": ["features/**/*.feature"],
+    "require": [
+      "step-definitions/**/*.ts",
+      "support/**/*.ts"
+    ],
+    "requireModule": ["ts-node/register"],
+    "format": [
+      "progress",
+      "html:reports/cucumber-report.html",
+      "junit:reports/cucumber-junit.xml"
+    ],
+    "formatOptions": {
+      "snippetInterface": "async"
+    },
+    "dryRun": false,
+    "strict": true,
+    "parallel": 1,
+    "worldParameters": {
+      "baseUrl": "http://localhost:8080"
+    }
+  }
+}
