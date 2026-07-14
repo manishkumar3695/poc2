@@ -1,25 +1,25 @@
 # AI Auto-Remediation Summary
 
-- **Status:** NO_CHANGES
-- **Safe fixes applied:** 0 (deterministic: 0, LLM: 0)
+- **Status:** OK
+- **Safe fixes applied:** 2 (deterministic: 2, LLM: 0)
 - **Files changed:** 7
 
 ## Fixed (deterministic)
 
-- (none)
-- No safe automated fixes were applicable.
+- [outdated-dependency] `pom.xml` — Bumped spring-boot-starter-parent from 3.3.13 to 3.5.14 (transitive fix for com.fasterxml.jackson.core:jackson-databind)
+- [outdated-base-image] `Dockerfile` — Added `apt-get upgrade -y` to runtime stage to remediate image-level OS-package CVEs (30 findings, e.g. bsdutils, gzip, libblkid1, libc-bin, libc6)
 
 ## Diff stat
 
 ```
-reports-test/ai-patch.diff                         | 588 ---------------------
- reports-test/changed-files.txt                     |   2 -
- reports-test/git-diff-stat.txt                     |   3 -
- reports-test/remediation-summary.md                |  26 -
- scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 72622 -> 74790 bytes
- .../generate-sonar-report.cpython-312.pyc          | Bin 33749 -> 0 bytes
- scripts/ai-remediation.py                          | 107 +++-
- 7 files changed, 96 insertions(+), 630 deletions(-)
+Dockerfile                                         |   1 +
+ pom.xml                                            |   2 +-
+ reports-test/ai-patch.diff                         | 821 ---------------------
+ reports-test/changed-files.txt                     |   7 -
+ reports-test/git-diff-stat.txt                     |   8 -
+ reports-test/remediation-summary.md                |  31 -
+ scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 74790 -> 75154 bytes
+ 7 files changed, 2 insertions(+), 868 deletions(-)
 ```
 
 ## Reviewer checklist

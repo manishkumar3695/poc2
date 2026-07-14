@@ -1,8 +1,8 @@
- reports-test/ai-patch.diff                         | 588 ---------------------
- reports-test/changed-files.txt                     |   2 -
- reports-test/git-diff-stat.txt                     |   3 -
- reports-test/remediation-summary.md                |  26 -
- scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 72622 -> 74790 bytes
- .../generate-sonar-report.cpython-312.pyc          | Bin 33749 -> 0 bytes
- scripts/ai-remediation.py                          | 107 +++-
- 7 files changed, 96 insertions(+), 630 deletions(-)
+ Dockerfile                                         |   1 +
+ pom.xml                                            |   2 +-
+ reports-test/ai-patch.diff                         | 821 ---------------------
+ reports-test/changed-files.txt                     |   7 -
+ reports-test/git-diff-stat.txt                     |   8 -
+ reports-test/remediation-summary.md                |  31 -
+ scripts/__pycache__/ai-remediation.cpython-312.pyc | Bin 74790 -> 75154 bytes
+ 7 files changed, 2 insertions(+), 868 deletions(-)

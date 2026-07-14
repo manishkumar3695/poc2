@@ -1,7 +1,7 @@
+Dockerfile
+pom.xml
 reports-test/ai-patch.diff
 reports-test/changed-files.txt
 reports-test/git-diff-stat.txt
 reports-test/remediation-summary.md
 scripts/__pycache__/ai-remediation.cpython-312.pyc
-scripts/__pycache__/generate-sonar-report.cpython-312.pyc
-scripts/ai-remediation.py

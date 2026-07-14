@@ -36,6 +36,7 @@ WORKDIR /app
 # and switch to it. The OWSAP lab exercises SQLi / XSS / SSRF etc. in the
 # application, so isolating the runtime from root is a useful baseline.
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends tini \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 1001 app \
