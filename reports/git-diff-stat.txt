@@ -1,5 +1,15 @@
- reports/SONAR_REPORT.md      |   4 +-
- reports/sonar-report.json    |   4 +-
- reports/trivy-image.raw.json | 358 +++++++++++++++++++++----------------------
- reports/trivy-image.sarif    |   2 +-
- 4 files changed, 184 insertions(+), 184 deletions(-)
+ Dockerfile                     |    1 +
+ reports/SONAR_REPORT.md        |    8 +-
+ reports/llm-prompt.txt         |  607 ++++++++++-
+ reports/llm-response.txt       |   55 -
+ reports/security-report.json   |  106 +-
+ reports/security-review.json   |  106 +-
+ reports/security-review.md     |   94 +-
+ reports/security-summary.txt   |   24 +-
+ reports/sonar-report.json      |    6 +-
+ reports/trivy-image.raw.json   | 2262 +++++++++++-----------------------------
+ reports/trivy-image.sarif      | 1466 ++++++--------------------
+ reports/trivy-image.sarif.json |  360 +------
+ reports/trivy-report.json      |  378 +------
+ reports/trivy-report.txt       |   48 +-
+ 14 files changed, 1761 insertions(+), 3760 deletions(-)
